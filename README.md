@@ -10,7 +10,7 @@ A comprehensive GUI tool for analyzing Simple Reaction Time (SRT) data with supp
   - [Statistical Analysis](#statistical-analysis)
   - [Data Filtering](#data-filtering)
 - [Installation](#installation)
-  - [App Installation])
+  - [App Installation](#app-installation)
   - [Using Conda (Recommended)](#using-conda-recommended)
   - [Manual Installation](#manual-installation)
 - [Data Format Requirements](#data-format-requirements)
