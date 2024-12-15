@@ -132,4 +132,3 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Support
 - Issues: Submit through GitHub Issues
 - Questions: Ask in Discussions
-- Documentation: Visit our Wiki
