@@ -57,6 +57,8 @@ A comprehensive GUI tool for analyzing Simple Reaction Time (SRT) data with supp
 ![Filtering Options](docs/images/filtering_options.png)
 
 ## Installation
+### App Installation
+A self-contained Mac and Windows Application of the GUI can be found here: https://drive.google.com/drive/u/0/folders/1-9Q1lAr3J_TuC20k3hZWmOzC08LtW_hj. The instructions in the sections below are for users who'd like to edit the source code.
 
 ### Using Conda (Recommended)
 1. Clone the repository
