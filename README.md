@@ -124,7 +124,7 @@ A self-contained Mac and Windows Application of the GUI can be found here: https
 - Statistical integration
 
 ## Contributing
-Please read our contributing guidelines for details on submitting pull requests.
+Please submit pull requests.
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.
