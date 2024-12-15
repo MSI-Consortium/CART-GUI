@@ -63,8 +63,8 @@ A self-contained Mac and Windows Application of the GUI can be found here: https
 
 ### Using Conda (Recommended)
 1. Clone the repository
-2. Create conda environment
-3. Run the application
+2. Create the environment: conda env create -f environment.yml
+3. Activate the environment: conda activate cart-gui
 
 ### Manual Installation
 1. Ensure Python 3.10+ is installed
