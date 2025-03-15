@@ -19,6 +19,7 @@ import scipy.stats as stats
 from scipy.stats import zscore
 import sys
 import os
+import json
 sys.setrecursionlimit(5000)
 class RangeSlider(QWidget):
     valueChanged = pyqtSignal(int, int)
@@ -256,7 +257,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.model_selector = QComboBox(self)
         self.model_selector.addItems(["Standard Race Model", "Coactivation Model",
                                       "Parallel Interactive Race Model",
-                                      "Multisensory Response Enhancement Model"])
+                                      "Multisensory Response Enhancement Model",
+                                      "Permutation Test"])
         self.model_selector.currentIndexChanged.connect(self.update_model_settings)
         left_layout.addWidget(self.model_selector)
 
@@ -265,7 +267,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         left_layout.addWidget(self.coactivation_widget)
         left_layout.addWidget(self.pir_widget)
         left_layout.addWidget(self.mre_widget)
-
+        left_layout.addWidget(self.permutation_widget)
         self.more_info_button = QPushButton('Race Model Selection More Info', self)
         self.more_info_button.clicked.connect(self.show_more_info)
         left_layout.addWidget(self.more_info_button)
@@ -346,7 +348,12 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.save_figure_button.clicked.connect(self.save_figure)
         right_layout.addWidget(self.save_figure_button)
 
-        self.explanation_label = QLabel('', self)
+        # Replace QLabel with QTextEdit for scrollable explanation
+        self.explanation_label = QTextEdit()
+        self.explanation_label.setReadOnly(True)
+        self.explanation_label.setFixedHeight(150)  # Set fixed height
+        self.explanation_label.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.explanation_label.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         right_layout.addWidget(self.explanation_label)
 
         self.anova_table = QTableWidget()
@@ -420,19 +427,42 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         mre_top_row.addLayout(alpha_layout)
         mre_top_row.addLayout(beta_layout)
         
-        # Lambda in bottom row (fix the incorrect method call)
+        # Lambda in bottom row
         lambda_layout = QVBoxLayout()
         self.mre_lambda_slider, lambda_label = self.create_labeled_slider(0, 100, "λ (integration strength)", "%")
         lambda_layout.addWidget(lambda_label)
-        mre_bottom_row.addLayout(lambda_layout)  # Changed from addLayout(lambda_label)
+        mre_bottom_row.addLayout(lambda_layout)
         
         mre_main_layout.addLayout(mre_top_row)
         mre_main_layout.addLayout(mre_bottom_row)
+        
+        # Permutation Test parameters
+        self.permutation_widget = QWidget(self)
+        permutation_layout = QVBoxLayout(self.permutation_widget)
+        permutation_layout.setSpacing(5)
+        
+        # Number of permutations
+        num_perm_layout = QHBoxLayout()
+        num_perm_label = QLabel("Number of permutations:")
+        self.num_permutations_input = QLineEdit("1000")
+        self.num_permutations_input.setToolTip("Higher values provide more accurate p-values but take longer to compute")
+        num_perm_layout.addWidget(num_perm_label)
+        num_perm_layout.addWidget(self.num_permutations_input)
+        permutation_layout.addLayout(num_perm_layout)
+        
+        # Alpha threshold
+        alpha_layout = QHBoxLayout()
+        alpha_label = QLabel("Significance level (α):")
+        self.alpha_threshold_input = QLineEdit("0.05")
+        alpha_layout.addWidget(alpha_label)
+        alpha_layout.addWidget(self.alpha_threshold_input)
+        permutation_layout.addLayout(alpha_layout)
     
         # Initially hide all parameter widgets
         self.coactivation_widget.setVisible(False)
         self.pir_widget.setVisible(False)
         self.mre_widget.setVisible(False)
+        self.permutation_widget.setVisible(False)
     
     def create_labeled_slider(self, min_value, max_value, name, description):
         container = QWidget()
@@ -467,6 +497,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.coactivation_widget.setVisible(selected_model == "Coactivation Model")
         self.pir_widget.setVisible(selected_model == "Parallel Interactive Race Model")
         self.mre_widget.setVisible(selected_model == "Multisensory Response Enhancement Model")
+        self.permutation_widget.setVisible(selected_model == "Permutation Test")
 
     def update_participant_settings(self):
         participant = self.participant_selector.currentText()
@@ -633,6 +664,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.coactivation_widget.setVisible(selected_model == "Coactivation Model")
         self.pir_widget.setVisible(selected_model == "Parallel Interactive Race Model")
         self.mre_widget.setVisible(selected_model == "Multisensory Response Enhancement Model")
+        self.permutation_widget.setVisible(selected_model == "Permutation Test")
 
     def update_participant_settings(self):
         participant = self.participant_selector.currentText()
@@ -889,7 +921,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 
             # Return data for first selected dataset if no specific dataset provided
             selected_items = self.dataset_list.selectedItems()
-            if selected_items:
+            if (selected_items):
                 return self.get_filtered_data(selected_items[0].text())
             
             return None
@@ -943,11 +975,27 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         if selected_items:
             all_participants = set()
             for item in selected_items:
-                data = self.datasets[item.text()]["data"]
-                all_participants.update(data['participant_number'].unique())
+                dataset_name = item.text()
+                if dataset_name in self.datasets:
+                    # Get unique participant IDs without converting to int
+                    participants = set(str(p) for p in self.datasets[dataset_name]["data"]["participant_number"].unique())
+                    all_participants.update(participants)
             
-            for participant in sorted(all_participants):
+            # Sort participants naturally (handles both numeric and non-numeric IDs)
+            def natural_sort_key(s):
+                """Key function for natural sorting that handles numbers within strings"""
+                import re
+                convert = lambda text: int(text) if text.isdigit() else text.lower()
+                return [convert(c) for c in re.split('([0-9]+)', str(s))]
+            
+            # Add sorted participants to selector
+            for participant in sorted(list(all_participants), key=natural_sort_key):
                 self.participant_selector.addItem(f"Participant {participant}")
+                
+        # Update visibility of exclusion buttons
+        self.exclude_participants_button.setVisible(True)
+        self.exclude_trials_button.setVisible(True)
+        self.undo_exclusions_button.setVisible(True)
 
     def calculate_mean_rt(self, data):
         mean_rt = data.groupby('modality')['reaction_time'].mean()
@@ -1692,8 +1740,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 user_ymax = float(self.ymax_input.text())
                 ymax = user_ymax
             except ValueError:
-                pass
-        
+                pass        
         # Update the input fields with current values
         self.ymin_input.setText(f"{ymin:.0f}")
         self.ymax_input.setText(f"{ymax:.0f}")
@@ -1758,6 +1805,30 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         n_datasets = len(selected_items)
         n_cols = int(np.ceil(np.sqrt(n_datasets)))
         n_rows = int(np.ceil(n_datasets / n_cols))
+        
+        # Base figure size with max dimensions
+        max_width = 12
+        max_height = 8
+        
+        # Calculate size per subplot
+        width_per_plot = 4
+        height_per_plot = 3
+        
+        # Calculate total size needed
+        total_width = min(max_width, n_cols * width_per_plot)
+        total_height = min(max_height, n_rows * height_per_plot)
+        
+        self.figure.set_size_inches(total_width, total_height)
+        
+        # Improved subplot spacing
+        self.figure.subplots_adjust(
+            left=0.1,
+            right=0.95,
+            bottom=0.15,  # Increased bottom margin for x-axis labels
+            top=0.9,
+            wspace=0.4,
+            hspace=0.6
+        )
     
         # Create subplots within the existing figure
         axs = self.figure.subplots(nrows=n_rows, ncols=n_cols)
@@ -1765,33 +1836,36 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         # Get y-axis limits
         try:
-            ymin = float(self.ymin_input.text())
-            ymax = float(self.ymax_input.text())
+            ymin = float(self.ymin_input.text()) if self.ymin_input.text() else None
+            ymax = float(self.ymax_input.text()) if self.ymax_input.text() else None
         except ValueError:
-            ymin = None
-            ymax = None
+            ymin, ymax = None, None
     
-        for idx, item in enumerate(selected_items):
+        for idx, item in selected_items:
             dataset_name = item.text()
-            data = self.get_filtered_data(dataset_name)
-            if data is None:
+            if dataset_name not in self.datasets:
                 continue
-    
+                
             ax = axs[idx]
-    
+            # Rotate x-axis labels to prevent overlap
+            ax.tick_params(axis='x', rotation=45)
+            # Adjust label padding
+            ax.tick_params(axis='both', which='major', pad=8)
+            
+            # Rest of the plotting code...
             excluded_participants = self.excluded_participants.get(dataset_name, [])
-    
-            for participant in data['participant_number'].unique():
+
+            for participant in self.datasets[dataset_name]["data"]['participant_number'].unique():
                 if participant in excluded_participants:
                     continue
-    
-                participant_data = data[data['participant_number'] == participant]
+
+                participant_data = self.datasets[dataset_name]["data"][self.datasets[dataset_name]["data"]['participant_number'] == participant]
                 median_rt = participant_data.groupby('modality')['reaction_time'].median()
-    
+
                 if len(median_rt) == 3:
                     ax.plot(['Audio', 'Visual', 'Audiovisual'], median_rt, '-o',
-                           label=f'P{participant}', markersize=2)
-    
+                            label=f'P{participant}', markersize=2)
+
             # Customize subplot
             ax.set_title(f'{dataset_name}')
             ax.set_xlabel('Modality')
@@ -1811,7 +1885,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         figure_data = {
             'datasets': {}
         }
-        for idx, item in enumerate(selected_items):
+        for item in selected_items:
             dataset_name = item.text()
             data = self.get_filtered_data(dataset_name)
             if data is not None:
@@ -1858,19 +1932,31 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         n_cols = int(np.ceil(np.sqrt(n_datasets)))
         n_rows = int(np.ceil(n_datasets / n_cols))
         
-        # Adjust figure size based on grid
-        if n_rows > 1:
-            self.figure.set_size_inches(8, 5 * (n_rows/2))  # Scale height with rows
+        # Base figure size with max dimensions
+        max_width = 12
+        max_height = 8
+        
+        # Calculate size per subplot
+        width_per_plot = 4
+        height_per_plot = 3
+        
+        # Calculate total size needed
+        total_width = min(max_width, n_cols * width_per_plot)
+        total_height = min(max_height, n_rows * height_per_plot)
+        
+        self.figure.set_size_inches(total_width, total_height)
     
-        # Create subplots with optimized spacing
+        # Adjust subplot spacing based on number of plots
         self.figure.subplots_adjust(
             left=0.1,
             right=0.95,
             bottom=0.1,
             top=0.9,
-            wspace=0.4,  # Increased horizontal spacing
-            hspace=0.5   # Increased vertical spacing
+            wspace=0.4,
+            hspace=0.6  # Increased vertical space between plots
         )
+        
+        # Create subplots with optimized spacing
         axs = self.figure.subplots(nrows=n_rows, ncols=n_cols)
         axs = np.atleast_1d(axs).flatten()
         
@@ -2202,25 +2288,115 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
         selected_model = self.model_selector.currentText()
         if selected_model == "Standard Race Model":
+            # Standard independent race model
             race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
         elif selected_model == "Coactivation Model":
+            # Coactivation model with Gaussian CDF
             mean_c = self.coactivation_mean_slider.value()
             std_c = self.coactivation_std_slider.value()
             race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
         elif selected_model == "Parallel Interactive Race Model":
+            # Parallel interactive race model
             gamma = self.pir_interaction_slider.value() / 100
             race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v) * (1 - gamma * np.minimum(ecdf_a, ecdf_v))
         elif selected_model == "Multisensory Response Enhancement Model":
+            # Multisensory response enhancement model
             alpha = self.mre_alpha_slider.value() / 100
             beta = self.mre_beta_slider.value() / 100
             lambda_param = self.mre_lambda_slider.value() / 100
             race_model = alpha * ecdf_a + beta * ecdf_v + lambda_param * (ecdf_a * ecdf_v)
+        elif selected_model == "Permutation Test":
+            # Set up standard race model as the null model
+            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
+            
+            # Get number of permutations and alpha threshold
+            try:
+                num_permutations = int(self.num_permutations_input.text())
+                alpha_threshold = float(self.alpha_threshold_input.text())
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Parameters", 
+                                  "Please enter valid numbers for permutation count and alpha threshold.")
+                num_permutations = 1000
+                alpha_threshold = 0.05
+            
+            # Calculate the observed test statistic (mean violation)
+            observed_violations = np.mean(np.maximum(ecdf_av - race_model, 0))
+            
+            # Permutation test
+            perm_violations = []
+            rt_combined = np.concatenate([rt_a, rt_v, rt_av])
+            n_a = len(rt_a)
+            n_v = len(rt_v)
+            n_av = len(rt_av)
+            
+            # Display a progress dialog for long-running permutation test
+            progress_dialog = QDialog(self)
+            progress_dialog.setWindowTitle("Running Permutation Test")
+            progress_layout = QVBoxLayout(progress_dialog)
+            
+            progress_label = QLabel("Calculating permutations...")
+            progress_bar = QSlider(Qt.Horizontal)  # Using QSlider as a progress bar
+            progress_bar.setRange(0, num_permutations)
+            progress_bar.setValue(0)
+            progress_bar.setEnabled(False)  # Make it read-only
+            
+            progress_layout.addWidget(progress_label)
+            progress_layout.addWidget(progress_bar)
+            
+            # Show dialog without blocking
+            progress_dialog.show()
+            QApplication.processEvents()  # Process UI events
+            
+            # Run permutation test
+            for i in range(num_permutations):
+                # Update progress bar periodically
+                if i % 10 == 0:
+                    progress_bar.setValue(i)
+                    QApplication.processEvents()  # Process UI events
+                    
+                # Shuffle the data to create permuted datasets
+                perm_combined = np.random.permutation(rt_combined)
+                perm_a = perm_combined[:n_a]
+                perm_v = perm_combined[n_a:n_a+n_v]
+                perm_av = perm_combined[n_a+n_v:n_a+n_v+n_av]
+                
+                # Calculate CDFs for permuted data
+                perm_ecdf_a = np.interp(common_rts, np.sort(perm_a), np.arange(1, len(perm_a) + 1) / len(perm_a))
+                perm_ecdf_v = np.interp(common_rts, np.sort(perm_v), np.arange(1, len(perm_v) + 1) / len(perm_v))
+                perm_ecdf_av = np.interp(common_rts, np.sort(perm_av), np.arange(1, len(perm_av) + 1) / len(perm_av))
+                
+                # Calculate race model for permuted data
+                perm_race_model = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
+                
+                # Calculate and store violation for this permutation
+                perm_violation = np.mean(np.maximum(perm_ecdf_av - perm_race_model, 0))
+                perm_violations.append(perm_violation)
+            
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Calculate p-value as the proportion of permuted violations >= observed violation
+            p_value = np.mean(np.array(perm_violations) >= observed_violations)
+            
+            # Store permutation test results in the race model
+            self.race_model_p_value = p_value
+            self.race_model_significant = p_value < alpha_threshold
+            
+            # Add indicator to race model if significant violation was found
+            if self.race_model_significant:
+                race_model = race_model * 0.98  # Slightly lower the race model to indicate significance
+            
+            # Show results in status bar
+            significance_str = "significant" if self.race_model_significant else "not significant"
+            self.statusBar().showMessage(f"Permutation test: p-value = {p_value:.4f} (violations are {significance_str} at α = {alpha_threshold})", 8000)
         else:
-            return None
+            return None  # Unknown model
 
+        # Ensure race model is valid
         race_model = np.clip(race_model, 0, 1)
         violations = np.maximum(ecdf_av - race_model, 0)
 
+        # Apply percentile range filter
         lower_percentile, upper_percentile = percentile_range
         lower_idx = int(len(violations) * lower_percentile / 100)
         upper_idx = int(len(violations) * upper_percentile / 100)
@@ -2294,6 +2470,30 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         n_datasets = len(selected_items)
         n_cols = int(np.ceil(np.sqrt(n_datasets)))
         n_rows = int(np.ceil(n_datasets / n_cols))
+        
+        # Base figure size with max dimensions
+        max_width = 12
+        max_height = 8
+        
+        # Calculate size per subplot
+        width_per_plot = 4
+        height_per_plot = 3
+        
+        # Calculate total size needed
+        total_width = min(max_width, n_cols * width_per_plot)
+        total_height = min(max_height, n_rows * height_per_plot)
+        
+        self.figure.set_size_inches(total_width, total_height)
+        
+        # Improved subplot spacing
+        self.figure.subplots_adjust(
+            left=0.1,
+            right=0.95,
+            bottom=0.1,
+            top=0.9,
+            wspace=0.4,
+            hspace=0.6
+        )
     
         axs = self.figure.subplots(nrows=n_rows, ncols=n_cols)
         axs = np.atleast_1d(axs).flatten()
@@ -2306,17 +2506,22 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
         for idx, item in enumerate(selected_items):
             dataset_name = item.text()
-            data = self.get_filtered_data(dataset_name)
-            if data is None:
+            if dataset_name not in self.datasets:
                 continue
-    
+                
             ax = axs[idx]
+            # Rotate x-axis labels to prevent overlap
+            ax.tick_params(axis='x', rotation=45)
+            # Adjust label padding
+            ax.tick_params(axis='both', which='major', pad=8)
+            
+            # Rest of the plotting code...
             factor1 = self.factor1_selector.currentText()
             factor2 = self.factor2_selector.currentText()
             percentile_range = (self.percentile_range_slider.first_position, 
                                 self.percentile_range_slider.second_position)
     
-            participants = data['participant_number'].unique()
+            participants = self.datasets[dataset_name]["data"]['participant_number'].unique()
             excluded_participants = self.excluded_participants.get(dataset_name, [])
     
             x_values = []
@@ -2327,7 +2532,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             for participant in participants:
                 if participant in excluded_participants:
                     continue
-                participant_data = data[data['participant_number'] == participant]
+                participant_data = self.datasets[dataset_name]["data"][self.datasets[dataset_name]["data"]['participant_number'] == participant]
     
                 x_value = self.get_factor_value(participant_data, factor1, percentile_range)
                 y_value = self.get_factor_value(participant_data, factor2, percentile_range)
@@ -2341,9 +2546,9 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             if x_values and y_values:
                 # Update global limits
                 global_xlim[0] = min(global_xlim[0], min(x_values))
-                global_xlim[1] = max(global_xlim[1], max(x_values))
+                global_xlim[1] = max(global_xlim[0], max(x_values))
                 global_ylim[0] = min(global_ylim[0], min(y_values))
-                global_ylim[1] = max(global_ylim[1], max(y_values))
+                global_ylim[1] = max(global_ylim[0], max(y_values))
     
             # Add line of best fit if enough points
             if len(x_values) > 1 and len(y_values) > 1:
@@ -2417,7 +2622,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.explanation_label.setText(stats_text)
     
     def handle_custom_factor_selection(self, text):
-        if text == "Custom Column...":
+        if (text == "Custom Column..."):
             # Get currently selected dataset (assuming one dataset selected)
             selected_items = self.dataset_list.selectedItems()
             if not selected_items:
@@ -2571,11 +2776,6 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
         <h3>3. Parallel Interactive Race Model</h3>
         <p>This model extends the standard race model by allowing interactions between the sensory channels. The processing of auditory information might speed up the processing of visual information, or vice versa.</p>
-        <p>Formula: P(RT ≤ t)_AV = P(RT ≤ t)_A + P(RT ≤ t)_V - [P(RT ≤ t)_A * P(RT ≤ t)_V] + γ * min(P(RT ≤ t)_A, P(RT ≤ t)_V)</p>
-        <p>Parameter:</p>
-        <ul>
-            <li><strong>Interaction (γ):</strong> Represents the strength of interaction between modalities. A higher value indicates stronger cross-modal facilitation.</li>
-        </ul>
 
         <h3>4. Multisensory Response Enhancement Model</h3>
         <p>This model posits that multisensory stimuli can lead to a nonlinear enhancement of response probabilities, beyond what would be predicted by simple summation.</p>
@@ -2700,13 +2900,16 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
     def open_participant_selection_dialog(self):
         """Enhanced dialog for excluding participants with preview and save options"""
+        # Get currently selected dataset
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "No Dataset", "Please select a dataset first.")
+            QMessageBox.warning(self, "No Dataset Selected", 
+                              "Please select a dataset before attempting to exclude participants.")
             return
-            
+        
         dataset_name = selected_items[0].text()
         if dataset_name not in self.datasets:
+            QMessageBox.warning(self, "Dataset Error", "Selected dataset not found.")
             return
             
         data = self.datasets[dataset_name]["data"]
@@ -2728,8 +2931,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         stats_text = f"Current Dataset Stats:\n"
         stats_text += f"Total Participants: {len(data['participant_number'].unique())}\n"
         for col in data.columns:
-            if col.lower() in ['age', 'subjectage']:
-                stats_text += f"Age Range: {data[col].min():.1f} - {data[col].max():.1f}\n"
+            if col != 'participant_number':
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    stats_text += f"{col}: Mean = {data[col].mean():.2f}, SD = {data[col].std():.2f}\n"
+                else:
+                    stats_text += f"{col}: Unique values = {', '.join(map(str, data[col].unique()))}\n"
         manual_layout.addWidget(stats_label)
         stats_label.setText(stats_text)
         
@@ -2740,35 +2946,33 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         # Add checkboxes for each participant with demographic info
         participant_checkboxes = {}
-        all_participants = sorted(data['participant_number'].unique())
+        
+        # Get unique participants and convert to strings for consistent handling
+        all_participants = sorted(str(p) for p in data['participant_number'].unique())
+        
+        # Identify demographic columns
         demo_cols = [col for col in data.columns if col.lower() in 
                     ['age', 'gender', 'sex', 'education', 'subjectage', 'subjectsex']]
         
         for participant in all_participants:
-            participant_data = data[data['participant_number'] == participant].iloc[0]
+            participant_data = data[data['participant_number'].astype(str) == participant].iloc[0]
             checkbox_text = f"Participant {participant}"
             
-            # Add demographic info to checkbox label
+            # Add demographic info if available
             demo_info = []
             for col in demo_cols:
-                value = participant_data[col]
-                if pd.api.types.is_numeric_dtype(data[col]):
-                    demo_info.append(f"{col}: {value:.1f}")
-                else:
-                    demo_info.append(f"{col}: {value}")
+                if col in participant_data:
+                    demo_info.append(f"{col}: {participant_data[col]}")
             
             if demo_info:
                 checkbox_text += f" ({', '.join(demo_info)})"
-                
+            
             checkbox = QCheckBox(checkbox_text)
-            if participant in self.excluded_participants.get(dataset_name, []):
-                checkbox.setChecked(True)
             participant_checkboxes[participant] = checkbox
             scroll_layout.addWidget(checkbox)
         
         scroll.setWidget(scroll_content)
         manual_layout.addWidget(scroll)
- 
         
         tab_widget.addTab(manual_tab, "Manual Selection")
         
@@ -2780,58 +2984,39 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         demographic_filters = {}
         
         for col in demo_cols:
-            if pd.api.types.is_numeric_dtype(data[col]):
-                # Numeric criteria (e.g., age)
-                filter_widget = QWidget()
-                filter_layout = QHBoxLayout(filter_widget)
-                
-                min_val = QLineEdit()
-                max_val = QLineEdit()
-                current_min = data[col].min()
-                current_max = data[col].max()
-                
-                min_val.setPlaceholderText(f"Min ({current_min:.1f})")
-                max_val.setPlaceholderText(f"Max ({current_max:.1f})")
-                
-                filter_layout.addWidget(QLabel("From:"))
-                filter_layout.addWidget(min_val)
-                filter_layout.addWidget(QLabel("To:"))
-                filter_layout.addWidget(max_val)
-                
-                demographic_filters[col] = {
-                    "type": "numeric",
-                    "widgets": (min_val, max_val),
-                    "range": (current_min, current_max)
-                }
-                
-                demo_form.addRow(f"{col}:", filter_widget)
-            else:
-                # Categorical criteria (e.g., gender)
-                filter_widget = QWidget()
-                filter_layout = QVBoxLayout(filter_widget)
-                
-                unique_values = data[col].unique()
-                checkboxes = []
-                
-                for value in unique_values:
-                    if pd.notna(value):
+            if col in data.columns:
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    # Numeric filter
+                    filter_layout = QHBoxLayout()
+                    min_input = QLineEdit()
+                    max_input = QLineEdit()
+                    min_input.setPlaceholderText("Min")
+                    max_input.setPlaceholderText("Max")
+                    filter_layout.addWidget(QLabel("Min:"))
+                    filter_layout.addWidget(min_input)
+                    filter_layout.addWidget(QLabel("Max:"))
+                    filter_layout.addWidget(max_input)
+                    demo_form.addRow(f"{col}:", filter_layout)
+                    demographic_filters[col] = {"type": "numeric", "widgets": (min_input, max_input)}
+                else:
+                    # Categorical filter
+                    unique_values = data[col].unique()
+                    filter_group = QWidget()
+                    filter_layout = QVBoxLayout(filter_group)
+                    checkboxes = []
+                    for value in unique_values:
                         checkbox = QCheckBox(str(value))
                         checkbox.setChecked(True)
                         checkboxes.append(checkbox)
                         filter_layout.addWidget(checkbox)
-                
-                demographic_filters[col] = {
-                    "type": "categorical",
-                    "widgets": checkboxes
-                }
-                
-                demo_form.addRow(f"{col}:", filter_widget)
+                    demo_form.addRow(f"{col}:", filter_group)
+                    demographic_filters[col] = {"type": "categorical", "widgets": checkboxes}
         
         demo_layout.addLayout(demo_form)
         tab_widget.addTab(demo_tab, "Demographic Criteria")
         main_layout.addWidget(tab_widget)
         
-        # Preview button
+        # Preview button and text area
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_text = QTextEdit()
@@ -2859,15 +3044,15 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                         max_val = float(max_widget.text()) if max_widget.text() else None
                         
                         if min_val is not None:
-                            excluded.update(data[data[col] < min_val]['participant_number'])
+                            excluded.update(str(p) for p in data[data[col] < min_val]['participant_number'])
                         if max_val is not None:
-                            excluded.update(data[data[col] > max_val]['participant_number'])
+                            excluded.update(str(p) for p in data[data[col] > max_val]['participant_number'])
                     except ValueError:
                         pass
                 else:  # categorical
                     selected_values = [cb.text() for cb in filter_info["widgets"] if cb.isChecked()]
                     if selected_values:
-                        excluded.update(data[~data[col].isin(selected_values)]['participant_number'])
+                        excluded.update(str(p) for p in data[~data[col].isin(selected_values)]['participant_number'])
             
             # Update preview text
             preview = "Exclusion Summary:\n"
@@ -2877,30 +3062,19 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             if excluded:
                 preview += "Participants to be excluded:\n"
                 for participant in sorted(excluded):
-                    participant_info = "P{:d}".format(participant)
+                    preview += f"Participant {participant}"
                     # Add demographic info for each participant
-                    participant_data = data[data['participant_number'] == participant].iloc[0]
+                    participant_data = data[data['participant_number'].astype(str) == participant].iloc[0]
+                    demo_info = []
                     for col in demo_cols:
-                        value = participant_data[col]
-                        if pd.api.types.is_numeric_dtype(data[col]):
-                            participant_info += f" | {col}: {value:.1f}"
-                        else:
-                            participant_info += f" | {col}: {value}"
-                    preview += participant_info + "\n"
-                
-                # Add demographic summary
-                if demo_cols:
-                    preview += "\nDemographic summary of excluded participants:\n"
-                    excluded_data = data[data['participant_number'].isin(excluded)]
-                    for col in demo_cols:
-                        if pd.api.types.is_numeric_dtype(data[col]):
-                            preview += f"{col}: {excluded_data[col].mean():.1f} ± {excluded_data[col].std():.1f}\n"
-                        else:
-                            value_counts = excluded_data[col].value_counts()
-                            preview += f"{col}: {dict(value_counts)}\n"
-            
+                        if col in participant_data:
+                            demo_info.append(f"{col}: {participant_data[col]}")
+                    if demo_info:
+                        preview += f" ({', '.join(demo_info)})"
+                    preview += "\n"
             
             preview_text.setText(preview)
+            return excluded
         
         preview_button.clicked.connect(update_preview)
         
@@ -2922,60 +3096,30 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         cancel_button = QPushButton("Cancel")
         
         def apply_exclusions():
-            excluded = set()
-            
-            # Get manual exclusions
-            manual_excluded = [p for p, cb in participant_checkboxes.items() if cb.isChecked()]
-            excluded.update(manual_excluded)
-            
-            # Get demographic exclusions
-            for col, filter_info in demographic_filters.items():
-                if filter_info["type"] == "numeric":
-                    min_widget, max_widget = filter_info["widgets"]
-                    try:
-                        min_val = float(min_widget.text()) if min_widget.text() else None
-                        max_val = float(max_widget.text()) if max_widget.text() else None
-                        
-                        if min_val is not None:
-                            excluded.update(data[data[col] < min_val]['participant_number'])
-                        if max_val is not None:
-                            excluded.update(data[data[col] > max_val]['participant_number'])
-                    except ValueError:
-                        pass
-                else:  # categorical
-                    selected_values = [cb.text() for cb in filter_info["widgets"] if cb.isChecked()]
-                    if selected_values:
-                        excluded.update(data[~data[col].isin(selected_values)]['participant_number'])
+            excluded = update_preview()
             
             if save_checkbox.isChecked() and save_name.text():
-                # Create new dataset with exclusions
                 new_name = save_name.text()
                 if new_name in self.datasets:
                     QMessageBox.warning(dialog, "Name Exists", 
-                                      "A dataset with this name already exists.")
+                                      "A dataset with this name already exists. Please choose a different name.")
                     return
-                    
-                # Create filtered dataset
-                new_data = data[~data['participant_number'].isin(excluded)].copy()
-                color = plt.cm.tab20(len(self.datasets) % 20)
-                pattern = 'solid'
                 
-                self.datasets[new_name] = {
-                    "data": new_data,
-                    "original_data": new_data.copy(),
-                    "color": color,
-                    "pattern": pattern
-                }
+                # Create new dataset with excluded participants removed
+                new_data = data[~data['participant_number'].astype(str).isin(excluded)].copy()
+                self.datasets[new_name] = {"data": new_data, "color": self.get_next_color()}
+                
+                # Add new dataset to list
                 self.dataset_list.addItem(new_name)
-                self.dataset_colors[new_name] = color
-                self.dataset_patterns[new_name] = pattern
-                self.excluded_participants[new_name] = []
-                self.excluded_trials[new_name] = []
             else:
-                # Apply exclusions to existing dataset
-                self.excluded_participants[dataset_name] = list(excluded)
+                # Update existing dataset
+                self.excluded_participants[dataset_name] = set(excluded)
+                self.datasets[dataset_name]["data"] = data[~data['participant_number'].astype(str).isin(excluded)].copy()
             
-            self.update_plots()
+            self.update_participant_selector()
+            if hasattr(self, 'current_figure_type'):
+                self.update_plots()
+            
             dialog.accept()
             
         ok_button.clicked.connect(apply_exclusions)
@@ -3219,7 +3363,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             file_ext = os.path.splitext(file_path)[1].lower()
 
             try:
-                if file_ext in ['.xlsx', '.xls']:
+                if (file_ext in ['.xlsx', '.xls']):
                     # It's an Excel file, load the file and ask user which sheet to use
                     xls = pd.ExcelFile(file_path)
                     sheets = xls.sheet_names
