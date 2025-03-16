@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QFormLayout, QHBoxLayout, QMessageBox,QFrame,
     QLineEdit, QRadioButton, QButtonGroup, QDialog, QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QSpinBox, QSlider, QFileDialog, QRadioButton, QButtonGroup, QScrollArea, QListWidget, QInputDialog,
-    QTabWidget, QGroupBox
+    QTabWidget, QGroupBox 
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -17,6 +17,9 @@ from matplotlib import colors as mcolors
 import scipy
 import scipy.stats as stats
 from scipy.stats import zscore
+from sklearn.manifold import MDS
+from sklearn.preprocessing import StandardScaler
+import matplotlib.cm as cm
 import sys
 import os
 import json
@@ -283,6 +286,10 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         race_model_layout.addWidget(self.plot_violations_button)
         race_model_layout.addWidget(self.use_percentiles_checkbox)
         left_layout.addLayout(race_model_layout)
+        
+        # Add permutation test checkbox and options
+        left_layout.addWidget(self.use_permutation_test_checkbox)
+        left_layout.addWidget(self.permutation_options_widget)
 
         # Scatter Plot Controls
         scatter_layout = QHBoxLayout()
@@ -333,6 +340,29 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         scatter_button_layout.addWidget(self.sync_axes_checkbox)
         left_layout.addLayout(scatter_button_layout)
 
+        # Add MDS Plot controls
+        mds_group = QGroupBox("Multidimensional Scaling (MDS)")
+        mds_layout = QVBoxLayout(mds_group)
+        
+        mds_options = QHBoxLayout()
+        self.mds_color_feature = QComboBox(self)
+        self.mds_color_feature.addItems(['Dataset', 'Age', 'Custom Column...'])
+        self.mds_color_feature.currentTextChanged.connect(self.handle_custom_mds_feature)
+        
+        self.plot_mds_button = QPushButton('MDS Plot', self)
+        self.plot_mds_button.clicked.connect(self.plot_mds)
+        
+        mds_options.addWidget(QLabel("Color by:"))
+        mds_options.addWidget(self.mds_color_feature)
+        mds_options.addWidget(self.plot_mds_button)
+        
+        mds_desc = QLabel("Visualizes participants in 2D space based on reaction time patterns")
+        mds_desc.setWordWrap(True)
+        
+        mds_layout.addLayout(mds_options)
+        mds_layout.addWidget(mds_desc)
+        
+        left_layout.addWidget(mds_group)
         # Add a stretch to push everything to the top
         left_layout.addStretch()
 
@@ -431,7 +461,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         lambda_layout = QVBoxLayout()
         self.mre_lambda_slider, lambda_label = self.create_labeled_slider(0, 100, "λ (integration strength)", "%")
         lambda_layout.addWidget(lambda_label)
-        mre_bottom_row.addLayout(lambda_layout)
+        mre_bottom_row.addWidget(lambda_label)
         
         mre_main_layout.addLayout(mre_top_row)
         mre_main_layout.addLayout(mre_bottom_row)
@@ -463,41 +493,50 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.pir_widget.setVisible(False)
         self.mre_widget.setVisible(False)
         self.permutation_widget.setVisible(False)
-    
-    def create_labeled_slider(self, min_value, max_value, name, description):
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(2)  # Reduce vertical spacing
         
-        # Create label row
-        label_row = QHBoxLayout()
-        name_label = QLabel(f"{name}")
-        value_label = QLabel(f"{(min_value + max_value) // 2}")
-        label_row.addWidget(name_label)
-        label_row.addWidget(value_label)
+        # Create a checkbox for permutation test that can be used with any model
+        self.use_permutation_test_checkbox = QCheckBox("Use permutation test for statistical validation")
+        self.use_permutation_test_checkbox.setToolTip(
+            "When checked, a permutation test will be performed to assess statistical significance of race model violations")
+        self.use_permutation_test_checkbox.setChecked(False)
+        self.use_permutation_test_checkbox.stateChanged.connect(self.toggle_permutation_parameters)
         
-        # Create and setup slider
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(min_value, max_value)
-        slider.setValue((min_value + max_value) // 2)
-        slider.valueChanged.connect(lambda v: value_label.setText(f"{v}"))
+        # Create a widget for permutation parameters that can be shown/hidden
+        self.permutation_options_widget = QWidget(self)
+        perm_options_layout = QVBoxLayout(self.permutation_options_widget)
+        perm_options_layout.setContentsMargins(10, 0, 0, 0)  # Add left indent
         
-        # Add description if provided
-        if description:
-            desc_label = QLabel(description)
-            desc_label.setStyleSheet("color: gray; font-size: 8pt;")
-            layout.addWidget(desc_label)
+        # Copy the permutation parameters to this widget
+        num_perm_layout2 = QHBoxLayout()
+        num_perm_label2 = QLabel("Number of permutations:")
+        self.num_permutations_input2 = QLineEdit("1000")
+        self.num_permutations_input2.setToolTip("Higher values provide more accurate p-values but take longer to compute")
+        num_perm_layout2.addWidget(num_perm_label2)
+        num_perm_layout2.addWidget(self.num_permutations_input2)
         
-        layout.addLayout(label_row)
-        layout.addWidget(slider)
+        alpha_layout2 = QHBoxLayout()
+        alpha_label2 = QLabel("Significance level (α):")
+        self.alpha_threshold_input2 = QLineEdit("0.05")
+        alpha_layout2.addWidget(alpha_label2)
+        alpha_layout2.addWidget(self.alpha_threshold_input2)
         
-        return slider, container
+        perm_options_layout.addLayout(num_perm_layout2)
+        perm_options_layout.addLayout(alpha_layout2)
+        
+        # Initially hide permutation options
+        self.permutation_options_widget.setVisible(False)
+
     def update_model_settings(self):
         selected_model = self.model_selector.currentText()
         self.coactivation_widget.setVisible(selected_model == "Coactivation Model")
         self.pir_widget.setVisible(selected_model == "Parallel Interactive Race Model")
         self.mre_widget.setVisible(selected_model == "Multisensory Response Enhancement Model")
         self.permutation_widget.setVisible(selected_model == "Permutation Test")
+        
+        # If model selection is no longer "Permutation Test", but the checkbox is checked,
+        # keep permutation options visible
+        if selected_model != "Permutation Test" and self.use_permutation_test_checkbox.isChecked():
+            self.permutation_options_widget.setVisible(True)
 
     def update_participant_settings(self):
         participant = self.participant_selector.currentText()
@@ -665,6 +704,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.pir_widget.setVisible(selected_model == "Parallel Interactive Race Model")
         self.mre_widget.setVisible(selected_model == "Multisensory Response Enhancement Model")
         self.permutation_widget.setVisible(selected_model == "Permutation Test")
+        
+        # If model selection is no longer "Permutation Test", but the checkbox is checked,
+        # keep permutation options visible
+        if selected_model != "Permutation Test" and self.use_permutation_test_checkbox.isChecked():
+            self.permutation_options_widget.setVisible(True)
 
     def update_participant_settings(self):
         participant = self.participant_selector.currentText()
@@ -905,7 +949,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     data = data[~data['participant_number'].isin(excluded_parts)]
                 
                 # Apply trial exclusions
-                if dataset_name in self.excluded_trials:
+                if (dataset_name in self.excluded_trials):
                     excluded_trials = self.excluded_trials[dataset_name]
                     valid_indices = [idx for idx in excluded_trials if idx in data.index]
                     if valid_indices:
@@ -1072,7 +1116,118 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         alpha = 1.0 - (dataset_index * shade_step)
         return self.adjust_lightness(base_color, alpha)
 
+    def plot_mds(self):
+        """
+        Plot Multidimensional Scaling (MDS) to visualize participants in 2D space
+        based on their reaction time patterns.
+        """
+        selected_items = self.dataset_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select at least one dataset.")
+            return
+    
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        self.current_figure_type = 'mds'
+    
+        # Get color feature (age or custom column)
+        color_feature = self.mds_color_feature.currentText()
+        
+        # Prepare data for MDS
+        all_participant_data = []
+        all_participant_ids = []
+        all_dataset_names = []
+        all_feature_values = []
+    
+        for item in selected_items:
+            dataset_name = item.text()
+            data = self.get_filtered_data(dataset_name)
+            
+            if data is None:
+                continue
+                
+            participants = data['participant_number'].unique()
+            
+            for participant in participants:
+                participant_data = data[data['participant_number'] == participant]
+                
+                # Create feature vector for this participant
+                features = []
+                
+                # Add interquartile range (IQR) for each modality
+                for modality in [1, 2, 3]:  # Audio, Visual, Audiovisual
+                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
+                    if len(rt) > 0 and len(rt) > 1:
+                        q75, q25 = np.percentile(rt, [75, 25])
+                        features.append(q75 - q25)  # IQR = Q3 - Q1
+                    else:
+                        features.append(np.nan)
+                        
+                # Add median RTs for each modality
+                for modality in [1, 2, 3]:
+                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
+                    if len(rt) > 0:
+                        features.append(rt.median())
+                    else:
+                        features.append(np.nan)
+                        
+                # Add variance for each modality
+                for modality in [1, 2, 3]:
+                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
+                    if len(rt) > 0 and len(rt) > 1:
+                        features.append(rt.var())  # Variance instead of std
+                    else:
+                        features.append(np.nan)
+                        
+                # Skip participants with missing data
+                if any(np.isnan(features)):
+                    continue
+                    
+                all_participant_data.append(features)
+                all_participant_ids.append(participant)
+                all_dataset_names.append(dataset_name)
+                
+                # Rest of the function remains the same...
+    
+    def handle_custom_mds_feature(self, text):
+        """Handle selection of custom column for MDS coloring"""
+        if text == "Custom Column...":
+            # Get currently selected dataset
+            selected_items = self.dataset_list.selectedItems()
+            if not selected_items:
+                QMessageBox.warning(self, "No Dataset", "Please select a dataset first.")
+                return
 
+            dataset_name = selected_items[0].text()
+            data = self.datasets[dataset_name]["data"]
+            all_columns = data.columns.tolist()
+
+            # Let user pick a column
+            column, ok = QInputDialog.getItem(self, "Select Column", 
+                                           "Choose a column for coloring MDS plot:", 
+                                           all_columns, 0, False)
+            if ok:
+                # Update the selector text to show this chosen column
+                self.mds_color_feature.blockSignals(True)  # Prevent recursion
+                self.mds_color_feature.setCurrentText(column)
+                self.mds_color_feature.blockSignals(False)
+
+    def update_plots(self):
+        # Update the current plot with new participant selection
+        if self.current_figure_type == 'mean_rts':
+            self.plot_mean_rts()
+        elif self.current_figure_type == 'median_rts':
+            self.plot_median_rts()
+        elif self.current_figure_type == 'boxplot_rts':
+            self.plot_boxplot_rts()
+        elif self.current_figure_type == 'participant_distribution':
+            self.plot_participant_distribution()
+        elif self.current_figure_type == 'race_model':
+            self.plot_race_model()
+        elif self.current_figure_type == 'scatter_plot':
+            self.plot_scatter()
+        elif self.current_figure_type == 'mds':
+            self.plot_mds()
     def plot_mean_rts(self):
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
@@ -2260,6 +2415,24 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         return stats_text
 
     def calculate_race_violation(self, participant_data, percentile_range):
+        """
+        Calculate race model violations based on the selected model type.
+        
+        This method computes CDFs for auditory, visual, and audiovisual reaction times,
+        then applies the selected race model to determine violations.
+        
+        Parameters:
+        -----------
+        participant_data : pandas.DataFrame
+            Data containing reaction times for each modality
+        percentile_range : tuple
+            Range of percentiles to consider (lower, upper)
+            
+        Returns:
+        --------
+        tuple
+            (mean_violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model)
+        """
         rt_a = participant_data[participant_data['modality'] == 1]['reaction_time']
         rt_v = participant_data[participant_data['modality'] == 2]['reaction_time']
         rt_av = participant_data[participant_data['modality'] == 3]['reaction_time']
@@ -2276,51 +2449,72 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         if min_val == max_val:
             return None  # no variability
 
+        # Create common reaction time points for interpolation
         common_rts = np.linspace(min_val, max_val, 500)
 
         # Double-check lengths before interpolation
         if len(rt_a) == 0 or len(rt_v) == 0 or len(rt_av) == 0:
             return None
 
+        # Calculate empirical cumulative distribution functions (ECDFs)
         ecdf_a = np.interp(common_rts, np.sort(rt_a), np.arange(1, len(rt_a) + 1) / len(rt_a))
         ecdf_v = np.interp(common_rts, np.sort(rt_v), np.arange(1, len(rt_v) + 1) / len(rt_v))
         ecdf_av = np.interp(common_rts, np.sort(rt_av), np.arange(1, len(rt_av) + 1) / len(rt_av))
 
         selected_model = self.model_selector.currentText()
+        
         if selected_model == "Standard Race Model":
-            # Standard independent race model
-            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
+            # Standard independent race model following Miller's inequality
+            # P(RT ≤ t)bimodal = min[P(RT ≤ t)modality1 + P(RT ≤ t)modality2, 1]
+            race_model = np.minimum(ecdf_a + ecdf_v, 1.0)
+            
         elif selected_model == "Coactivation Model":
             # Coactivation model with Gaussian CDF
+            # Parameters represent the mean and standard deviation of the combined activation
             mean_c = self.coactivation_mean_slider.value()
             std_c = self.coactivation_std_slider.value()
             race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
+            
         elif selected_model == "Parallel Interactive Race Model":
-            # Parallel interactive race model
+            # Enhanced model with cross-modal interaction term
+            # P(RT ≤ t)bimodal = [1 - (1 - P(RT ≤ t)mod1)(1 - P(RT ≤ t)mod2)] + γ·P(RT ≤ t)interaction
+            # Here we model the interaction term as γ·min(P(RT ≤ t)mod1, P(RT ≤ t)mod2)
             gamma = self.pir_interaction_slider.value() / 100
-            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v) * (1 - gamma * np.minimum(ecdf_a, ecdf_v))
+            # Base race model (probability of either modality finishing first)
+            base_race = 1 - (1 - ecdf_a) * (1 - ecdf_v)
+            # Interaction term that facilitates responses
+            interaction_term = gamma * np.minimum(ecdf_a, ecdf_v)
+            # Combined model with gamma-weighted interaction
+            race_model = base_race + interaction_term
+            
         elif selected_model == "Multisensory Response Enhancement Model":
-            # Multisensory response enhancement model
+            # Model with weighted contributions from each modality plus interaction
+            # P(RT ≤ t)bimodal = α·P(RT ≤ t)mod1 + β·P(RT ≤ t)mod2 + λ·[P(RT ≤ t)mod1 · P(RT ≤ t)mod2]
             alpha = self.mre_alpha_slider.value() / 100
             beta = self.mre_beta_slider.value() / 100
             lambda_param = self.mre_lambda_slider.value() / 100
             race_model = alpha * ecdf_a + beta * ecdf_v + lambda_param * (ecdf_a * ecdf_v)
-        elif selected_model == "Permutation Test":
-            # Set up standard race model as the null model
-            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
             
-            # Get number of permutations and alpha threshold
+        else:
+            return None  # Unknown model
+
+        # Ensure race model is valid (probability between 0 and 1)
+        race_model = np.clip(race_model, 0, 1)
+        
+        # Run permutation test if enabled (now works with any model)
+        if hasattr(self, 'use_permutation_test_checkbox') and self.use_permutation_test_checkbox.isChecked():
+            # Calculate the observed test statistic (mean violation)
+            observed_violations = np.mean(np.maximum(ecdf_av - race_model, 0))
+            
+            # Get parameters for permutation test
             try:
-                num_permutations = int(self.num_permutations_input.text())
-                alpha_threshold = float(self.alpha_threshold_input.text())
-            except ValueError:
+                num_permutations = int(self.num_permutations_input2.text())
+                alpha_threshold = float(self.alpha_threshold_input2.text())
+            except (ValueError, AttributeError):
                 QMessageBox.warning(self, "Invalid Parameters", 
                                   "Please enter valid numbers for permutation count and alpha threshold.")
                 num_permutations = 1000
                 alpha_threshold = 0.05
-            
-            # Calculate the observed test statistic (mean violation)
-            observed_violations = np.mean(np.maximum(ecdf_av - race_model, 0))
             
             # Permutation test
             perm_violations = []
@@ -2365,8 +2559,27 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 perm_ecdf_v = np.interp(common_rts, np.sort(perm_v), np.arange(1, len(perm_v) + 1) / len(perm_v))
                 perm_ecdf_av = np.interp(common_rts, np.sort(perm_av), np.arange(1, len(perm_av) + 1) / len(perm_av))
                 
-                # Calculate race model for permuted data
-                perm_race_model = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
+                # Calculate race model for permuted data using the same model as selected
+                if selected_model == "Standard Race Model":
+                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)
+                elif selected_model == "Coactivation Model":
+                    mean_c = self.coactivation_mean_slider.value()
+                    std_c = self.coactivation_std_slider.value()
+                    perm_race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
+                elif selected_model == "Parallel Interactive Race Model":
+                    gamma = self.pir_interaction_slider.value() / 100
+                    base_race = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
+                    interaction_term = gamma * np.minimum(perm_ecdf_a, perm_ecdf_v)
+                    perm_race_model = base_race + interaction_term
+                elif selected_model == "Multisensory Response Enhancement Model":
+                    alpha = self.mre_alpha_slider.value() / 100
+                    beta = self.mre_beta_slider.value() / 100
+                    lambda_param = self.mre_lambda_slider.value() / 100
+                    perm_race_model = alpha * perm_ecdf_a + beta * perm_ecdf_v + lambda_param * (perm_ecdf_a * perm_ecdf_v)
+                else:
+                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)  # Default to standard
+                
+                perm_race_model = np.clip(perm_race_model, 0, 1)
                 
                 # Calculate and store violation for this permutation
                 perm_violation = np.mean(np.maximum(perm_ecdf_av - perm_race_model, 0))
@@ -2378,7 +2591,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             # Calculate p-value as the proportion of permuted violations >= observed violation
             p_value = np.mean(np.array(perm_violations) >= observed_violations)
             
-            # Store permutation test results in the race model
+            # Store permutation test results
             self.race_model_p_value = p_value
             self.race_model_significant = p_value < alpha_threshold
             
@@ -2388,12 +2601,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             
             # Show results in status bar
             significance_str = "significant" if self.race_model_significant else "not significant"
-            self.statusBar().showMessage(f"Permutation test: p-value = {p_value:.4f} (violations are {significance_str} at α = {alpha_threshold})", 8000)
-        else:
-            return None  # Unknown model
-
-        # Ensure race model is valid
-        race_model = np.clip(race_model, 0, 1)
+            self.statusBar().showMessage(
+                f"Permutation test ({selected_model}): p-value = {p_value:.4f} "
+                f"(violations are {significance_str} at α = {alpha_threshold})", 8000)
+        
+        # Calculate violations as the positive difference between observed and predicted CDFs
         violations = np.maximum(ecdf_av - race_model, 0)
 
         # Apply percentile range filter
@@ -2401,6 +2613,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         lower_idx = int(len(violations) * lower_percentile / 100)
         upper_idx = int(len(violations) * upper_percentile / 100)
 
+        # Return mean violation within the specified range, along with all distributions
         return np.mean(violations[lower_idx:upper_idx]), common_rts, ecdf_a, ecdf_v, ecdf_av, race_model
 
 
@@ -2421,42 +2634,6 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             data = participant_data['reaction_time']
         q75, q25 = np.percentile(data, [75, 25])
         return q75 - q25
-
-    def calculate_race_violation(self, participant_data, percentile_range):
-        rt_a = participant_data[participant_data['modality'] == 1]['reaction_time']
-        rt_v = participant_data[participant_data['modality'] == 2]['reaction_time']
-        rt_av = participant_data[participant_data['modality'] == 3]['reaction_time']
-
-        common_rts = np.linspace(min(rt_a.min(), rt_v.min(), rt_av.min()),
-                                 max(rt_a.max(), rt_v.max(), rt_av.max()), 500)
-
-        ecdf_a = np.interp(common_rts, np.sort(rt_a), np.arange(1, len(rt_a) + 1) / len(rt_a))
-        ecdf_v = np.interp(common_rts, np.sort(rt_v), np.arange(1, len(rt_v) + 1) / len(rt_v))
-        ecdf_av = np.interp(common_rts, np.sort(rt_av), np.arange(1, len(rt_av) + 1) / len(rt_av))
-
-        selected_model = self.model_selector.currentText()
-        if selected_model == "Standard Race Model":
-            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
-        elif selected_model == "Coactivation Model":
-            mean_c = self.coactivation_mean_slider.value()
-            std_c = self.coactivation_std_slider.value()
-            race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
-        elif selected_model == "Parallel Interactive Race Model":
-            gamma = self.pir_interaction_slider.value() / 100
-            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v) * (1 - gamma * np.minimum(ecdf_a, ecdf_v))
-        elif selected_model == "Multisensory Response Enhancement Model":
-            alpha = self.mre_alpha_slider.value() / 100
-            beta = self.mre_beta_slider.value() / 100
-            lambda_param = self.mre_lambda_slider.value() / 100
-            race_model = alpha * ecdf_a + beta * ecdf_v + lambda_param * (ecdf_a * ecdf_v)
-
-        race_model = np.clip(race_model, 0, 1)
-        violations = np.maximum(ecdf_av - race_model, 0)
-
-        lower_percentile, upper_percentile = percentile_range
-        lower_idx = int(len(violations) * lower_percentile / 100)
-        upper_idx = int(len(violations) * upper_percentile / 100)
-        return np.mean(violations[lower_idx:upper_idx]), common_rts, ecdf_a, ecdf_v, ecdf_av, race_model
 
     def plot_scatter(self):
         selected_items = self.dataset_list.selectedItems()
@@ -2595,7 +2772,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Hide unused subplots
         for idx in range(len(selected_items), len(axs)):
             axs[idx].set_visible(False)
-    
+
             figure_data = {
                 'datasets': {}
             }
@@ -2762,24 +2939,33 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
         <h3>1. Standard Race Model (Probability Summation Model)</h3>
         <p>This model assumes independent and parallel processing of stimuli from different sensory modalities. The reaction time for audiovisual (AV) stimuli is predicted by the probability that either the auditory (A) or visual (V) signal will trigger a response first.</p>
-        <p>Formula: P(RT ≤ t)_AV = P(RT ≤ t)_A + P(RT ≤ t)_V - [P(RT ≤ t)_A * P(RT ≤ t)_V]</p>
-        <p>This model serves as a baseline and does not have adjustable parameters.</p>
+        <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = min[P(RT ≤ t)<sub>modality 1</sub> + P(RT ≤ t)<sub>modality 2</sub>, 1]</p>
+        <p>This formulation—originally derived from Raab (1962)—assumes stochastic independence between the "racers" and follows the more stringent inequality emphasized by Miller (1982), wherein the summed CDF (capped at 1) serves as the upper bound. In our GUI, observed reaction times that exceed this bound indicate significant multisensory integration.</p>
 
         <h3>2. Coactivation Model</h3>
-        <p>This model assumes that information from different sensory channels is combined and integrated at some level of processing. It predicts stronger facilitation effects than the standard race model.</p>
-        <p>Formula: P(RT ≤ t)_AV = Φ((t - μ_c) / σ_c)</p>
+        <p>In the coactivation framework, inputs from multiple sensory modalities are pooled together to form a combined activation signal that drives the decision process. Rather than assuming that the entire bimodal RT distribution is normal, this model posits that each modality contributes independently to an accumulating decision variable. The response is triggered when this joint activation reaches a threshold.</p>
+        <p>If the decision variable is modeled as the sum of the sensory-specific activations:</p>
+        <p>X(t) = X<sub>A</sub>(t) + X<sub>V</sub>(t)</p>
+        <p>Then the reaction time is determined by the first passage time of X(t) to a pre-set boundary. This process is typically described using sequential sampling or diffusion models, where an enhanced drift rate under redundant (bimodal) stimulation leads to faster responses compared to unisensory conditions.</p>
         <p>Parameters:</p>
         <ul>
-            <li><strong>Mean (μ_c):</strong> The average reaction time for the combined AV stimulus. A lower value indicates faster overall processing.</li>
-            <li><strong>Standard Deviation (σ_c):</strong> The variability in reaction times. A lower value suggests more consistent responses.</li>
+            <li><strong>Mean (μ<sub>c</sub>):</strong> The average reaction time for the combined AV stimulus. A lower value indicates faster overall processing.</li>
+            <li><strong>Standard Deviation (σ<sub>c</sub>):</strong> The variability in reaction times. A lower value suggests more consistent responses.</li>
         </ul>
 
         <h3>3. Parallel Interactive Race Model</h3>
-        <p>This model extends the standard race model by allowing interactions between the sensory channels. The processing of auditory information might speed up the processing of visual information, or vice versa.</p>
+        <p>This model accounts for interactions between modalities that enhance the race dynamics. It retains the basic premise of independent processing while incorporating limited inter-channel interactions (crosstalk) that further facilitate responses.</p>
+        <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = [1 - (1 - P(RT ≤ t)<sub>modality 1</sub>)(1 - P(RT ≤ t)<sub>modality 2</sub>)] + γ · P(RT ≤ t)<sub>interaction</sub></p>
+        <p>where γ represents the magnitude of the interaction effect between the modalities, and P(RT ≤ t)<sub>interaction</sub> captures the additional probability of response arising from inter-channel communication. This model was introduced by Mordkoff and Yantis (1993) and further refined by Townsend and Wenger (2011).</p>
+        <p>Parameters:</p>
+        <ul>
+            <li><strong>Interaction (γ):</strong> The strength of cross-modal interaction. Higher values indicate stronger facilitation between sensory channels.</li>
+        </ul>
 
         <h3>4. Multisensory Response Enhancement Model</h3>
-        <p>This model posits that multisensory stimuli can lead to a nonlinear enhancement of response probabilities, beyond what would be predicted by simple summation.</p>
-        <p>Formula: P(RT ≤ t)_AV = α * P(RT ≤ t)_A + β * P(RT ≤ t)_V + λ * [P(RT ≤ t)_A * P(RT ≤ t)_V]</p>
+        <p>This model posits that the combination of sensory inputs results in an enhanced response exceeding the sum of individual inputs.</p>
+        <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = α · P(RT ≤ t)<sub>modality 1</sub> + β · P(RT ≤ t)<sub>modality 2</sub> + λ · [P(RT ≤ t)<sub>modality 1</sub> · P(RT ≤ t)<sub>modality 2</sub>]</p>
+        <p>where α, β, and λ are parameters representing the individual contributions and interaction effects of the modalities. This formulation, as proposed by Otto et al. (2013) and further developed by Gondan and Minakata (2014), quantifies the multisensory enhancement by incorporating both additive and multiplicative factors.</p>
         <p>Parameters:</p>
         <ul>
             <li><strong>α (Alpha):</strong> Weight given to the auditory modality. Higher values indicate greater influence of auditory stimuli.</li>
@@ -2787,7 +2973,15 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             <li><strong>λ (Lambda):</strong> Interaction term that represents the synergistic effect of combining auditory and visual information. Higher values indicate stronger multisensory integration.</li>
         </ul>
 
-        <p>Note: In all formulas, P(RT ≤ t) represents the cumulative probability of a response occurring by time t, and Φ represents the cumulative distribution function of the standard normal distribution.</p>
+        <h3>5. Permutation Test</h3>
+        <p>The permutation test assesses the statistical significance of observed race model violations by randomly reassigning reaction times between conditions. This provides a robust quantitative measure of multisensory integration as described by Colonius and Diederich (2006).</p>
+        <p>Parameters:</p>
+        <ul>
+            <li><strong>Number of permutations:</strong> Higher values provide more accurate p-values but take longer to compute.</li>
+            <li><strong>Significance level (α):</strong> The threshold for determining statistical significance.</li>
+        </ul>
+
+        <p>All of these models allow CART-GUI to plot CDFs and highlight quantitative violations, providing insight into different aspects of multisensory integration. You can adjust each model's parameters to explore various theoretical frameworks and their implications for your data.</p>
         """
 
         # Create a custom dialog
@@ -2903,10 +3097,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Get currently selected dataset
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "No Dataset Selected", 
-                              "Please select a dataset before attempting to exclude participants.")
+            QMessageBox.warning(self, "No Selection", "Please select a dataset first.")
             return
-        
         dataset_name = selected_items[0].text()
         if dataset_name not in self.datasets:
             QMessageBox.warning(self, "Dataset Error", "Selected dataset not found.")
@@ -3493,6 +3685,51 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         rgb = mcolors.to_rgb(color)
         # Mix with white based on alpha
         return tuple(c * alpha + (1 - alpha) for c in rgb)
+
+    def toggle_permutation_parameters(self, state):
+        """Show or hide permutation parameters based on checkbox state"""
+        self.permutation_options_widget.setVisible(state == Qt.Checked)
+        
+        # Update the status bar with helpful message when enabled
+        if state == Qt.Checked:
+            self.statusBar().showMessage("Permutation testing enabled for race model validation", 5000)
+        else:
+            self.statusBar().showMessage("Permutation testing disabled", 3000)
+
+    def create_labeled_slider(self, min_val, max_val, label_text, units_text=""):
+        """
+        Create a slider with a label that shows the current value.
+        
+        Parameters:
+        -----------
+        min_val : int
+            Minimum value for slider
+        max_val : int
+            Maximum value for slider
+        label_text : str
+            Text to display next to the slider
+        units_text : str
+            Units to display after the value (e.g., "ms", "%")
+            
+        Returns:
+        --------
+        tuple
+            (slider, label)
+        """
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(min_val, max_val)
+        slider.setValue((min_val + max_val) // 2)  # Set default to middle value
+        
+        # Create label with value display
+        label = QLabel(f"{label_text}: {slider.value()} {units_text}")
+        
+        # Update label when slider value changes
+        def update_label(value):
+            label.setText(f"{label_text}: {value} {units_text}")
+            
+        slider.valueChanged.connect(update_label)
+        
+        return slider, label
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
