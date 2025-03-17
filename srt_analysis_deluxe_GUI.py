@@ -526,18 +526,6 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Initially hide permutation options
         self.permutation_options_widget.setVisible(False)
 
-    def update_model_settings(self):
-        selected_model = self.model_selector.currentText()
-        self.coactivation_widget.setVisible(selected_model == "Coactivation Model")
-        self.pir_widget.setVisible(selected_model == "Parallel Interactive Race Model")
-        self.mre_widget.setVisible(selected_model == "Multisensory Response Enhancement Model")
-        self.permutation_widget.setVisible(selected_model == "Permutation Test")
-        
-        # If model selection is no longer "Permutation Test", but the checkbox is checked,
-        # keep permutation options visible
-        if selected_model != "Permutation Test" and self.use_permutation_test_checkbox.isChecked():
-            self.permutation_options_widget.setVisible(True)
-
     def update_participant_settings(self):
         participant = self.participant_selector.currentText()
         self.exclude_participants_button.setVisible(participant == "All Participants")
@@ -1125,69 +1113,113 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         if not selected_items:
             QMessageBox.warning(self, "No Selection", "Please select at least one dataset.")
             return
-    
+
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         self.current_figure_type = 'mds'
-    
-        # Get color feature (age or custom column)
+
+        # Get color feature (e.g., Age, Dataset, or a custom column)
         color_feature = self.mds_color_feature.currentText()
-        
+
         # Prepare data for MDS
         all_participant_data = []
         all_participant_ids = []
         all_dataset_names = []
         all_feature_values = []
-    
+
         for item in selected_items:
             dataset_name = item.text()
             data = self.get_filtered_data(dataset_name)
-            
             if data is None:
                 continue
-                
+
             participants = data['participant_number'].unique()
-            
             for participant in participants:
                 participant_data = data[data['participant_number'] == participant]
-                
-                # Create feature vector for this participant
+
+                # Create feature vector for this participant:
+                # - IQR for each modality
+                # - Median RT for each modality
+                # - Variance for each modality
                 features = []
-                
-                # Add interquartile range (IQR) for each modality
-                for modality in [1, 2, 3]:  # Audio, Visual, Audiovisual
+                for modality in [1, 2, 3]:
                     rt = participant_data[participant_data['modality'] == modality]['reaction_time']
-                    if len(rt) > 0 and len(rt) > 1:
+                    if len(rt) > 1:
                         q75, q25 = np.percentile(rt, [75, 25])
-                        features.append(q75 - q25)  # IQR = Q3 - Q1
+                        features.append(q75 - q25)
                     else:
                         features.append(np.nan)
-                        
-                # Add median RTs for each modality
                 for modality in [1, 2, 3]:
                     rt = participant_data[participant_data['modality'] == modality]['reaction_time']
                     if len(rt) > 0:
                         features.append(rt.median())
                     else:
                         features.append(np.nan)
-                        
-                # Add variance for each modality
                 for modality in [1, 2, 3]:
                     rt = participant_data[participant_data['modality'] == modality]['reaction_time']
-                    if len(rt) > 0 and len(rt) > 1:
-                        features.append(rt.var())  # Variance instead of std
+                    if len(rt) > 1:
+                        features.append(rt.var())
                     else:
                         features.append(np.nan)
-                        
-                # Skip participants with missing data
+
+                # Skip this participant if any feature is missing
                 if any(np.isnan(features)):
                     continue
-                    
+
                 all_participant_data.append(features)
                 all_participant_ids.append(participant)
                 all_dataset_names.append(dataset_name)
-                
-                # Rest of the function remains the same...
+
+                # Determine value for coloring based on the selected feature
+                if color_feature in participant_data.columns:
+                    try:
+                        val = float(participant_data[color_feature].iloc[0])
+                    except ValueError:
+                        val = 0
+                elif color_feature == "Dataset":
+                    # Placeholder; colors will be assigned later
+                    val = None
+                else:
+                    val = 0
+                all_feature_values.append(val)
+
+        if not all_participant_data:
+            QMessageBox.warning(self, "Insufficient Data", "Not enough valid participant data for MDS.")
+            return
+
+        # Perform MDS embedding
+        mds_model = MDS(n_components=2, random_state=42)
+        embedding = mds_model.fit_transform(np.array(all_participant_data))
+
+        # If coloring by "Dataset", assign each dataset a distinct RGB color.
+        if color_feature == "Dataset":
+            colors_list = list(mcolors.TABLEAU_COLORS.values())
+            # Create a mapping from dataset name to a distinct color.
+            dataset_names_unique = list(dict.fromkeys(all_dataset_names))
+            dataset_color_map = {name: colors_list[i % len(colors_list)]
+                                 for i, name in enumerate(dataset_names_unique)}
+            colors_for_points = [dataset_color_map[ds] for ds in all_dataset_names]
+            scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
+                                 c=colors_for_points, s=50)
+            ax.legend(handles=[plt.Line2D([0], [0], marker='o', color='w',
+                                           markerfacecolor=dataset_color_map[name],
+                                           markersize=8, label=name)
+                               for name in dataset_names_unique],
+                      title="Dataset")
+        else:
+            scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
+                                 c=all_feature_values, cmap='viridis', s=50)
+            self.figure.colorbar(scatter, ax=ax, label=color_feature)
+        
+        ax.set_title("MDS Plot")
+        ax.set_xlabel(" Rep. Dimension 1")
+        ax.set_ylabel("Rep. Dimension 2")
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+            
+        self.canvas.draw()
     
     def handle_custom_mds_feature(self, text):
         """Handle selection of custom column for MDS coloring"""
@@ -1996,7 +2028,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         except ValueError:
             ymin, ymax = None, None
     
-        for idx, item in selected_items:
+        for idx, item in enumerate(selected_items):
             dataset_name = item.text()
             if dataset_name not in self.datasets:
                 continue
