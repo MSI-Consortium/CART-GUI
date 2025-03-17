@@ -1009,22 +1009,21 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             for item in selected_items:
                 dataset_name = item.text()
                 if dataset_name in self.datasets:
-                    # Get unique participant IDs without converting to int
-                    participants = set(str(p) for p in self.datasets[dataset_name]["data"]["participant_number"].unique())
-                    all_participants.update(participants)
-            
-            # Sort participants naturally (handles both numeric and non-numeric IDs)
+                    data = self.datasets[dataset_name]["data"]
+                    if "participant_number" in data.columns:
+                        participants = set(str(p) for p in data["participant_number"].unique())
+                        all_participants.update(participants)
+                    else:
+                        print(f"Warning: Dataset '{dataset_name}' missing 'participant_number' column. Skipping.")
+            # Natural sort
             def natural_sort_key(s):
-                """Key function for natural sorting that handles numbers within strings"""
                 import re
                 convert = lambda text: int(text) if text.isdigit() else text.lower()
                 return [convert(c) for c in re.split('([0-9]+)', str(s))]
-            
-            # Add sorted participants to selector
+                
             for participant in sorted(list(all_participants), key=natural_sort_key):
                 self.participant_selector.addItem(f"Participant {participant}")
-                
-        # Update visibility of exclusion buttons
+                    
         self.exclude_participants_button.setVisible(True)
         self.exclude_trials_button.setVisible(True)
         self.undo_exclusions_button.setVisible(True)
@@ -1171,13 +1170,19 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 all_dataset_names.append(dataset_name)
 
                 # Determine value for coloring based on the selected feature
-                if color_feature in participant_data.columns:
+                if color_feature == "Age":
+                    # Use 'SubjectAge' if available; otherwise, try 'Age'
+                    col = "SubjectAge" if "SubjectAge" in participant_data.columns else "Age"
+                    try:
+                        val = float(participant_data[col].iloc[0])
+                    except ValueError:
+                        val = 0
+                elif color_feature in participant_data.columns:
                     try:
                         val = float(participant_data[color_feature].iloc[0])
                     except ValueError:
                         val = 0
                 elif color_feature == "Dataset":
-                    # Placeholder; colors will be assigned later
                     val = None
                 else:
                     val = 0
