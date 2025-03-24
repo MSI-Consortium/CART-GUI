@@ -328,6 +328,15 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         mds_options.addWidget(self.mds_color_feature)
         mds_options.addWidget(self.plot_mds_button)
         mds_layout.addLayout(mds_options)
+        
+        # Add the mds_age_slider for age filtering (initially hidden)
+        self.mds_age_slider = RangeSlider(self)
+        self.mds_age_slider.setRange(0, 100)
+        self.mds_age_slider.setStart(0)
+        self.mds_age_slider.setEnd(100)
+        mds_layout.addWidget(self.mds_age_slider)
+        self.mds_age_slider.setVisible(False)
+        
         mds_desc = QLabel("Visualizes participants in 2D space based on reaction time patterns")
         mds_desc.setWordWrap(True)
         mds_layout.addWidget(mds_desc)
@@ -1120,7 +1129,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         all_participant_data = []
         all_participant_ids = []
         all_dataset_names = []
-        all_feature_values = []  # Will store either dataset color or a numeric value (e.g. Age)
+        all_feature_values = []  # Stores either dataset color or a numeric value (e.g. Age)
     
         for item in selected_items:
             dataset_name = item.text()
@@ -1132,35 +1141,43 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 participant_data = data[data['participant_number'] == participant]
                 features = []
                 for feat in mds_features:
-                    value = self.get_factor_value(participant_data, feat, (0,100))
+                    value = self.get_factor_value(participant_data, feat, (0, 100))
                     try:
                         f_val = float(value)
                     except (ValueError, TypeError):
                         f_val = np.nan
                     features.append(f_val)
-                # If only one feature was selected (e.g., Age), duplicate it so MDS has 2 dims.
+                # Duplicate feature if only one is selected so we have 2D data for MDS
                 if len(features) == 1:
                     features = features * 2
                 if any(np.isnan(features)):
                     continue
-                all_participant_data.append(features)
-                all_participant_ids.append(participant)
-                all_dataset_names.append(dataset_name)
-                # Determine color value based on mds_color_feature selection
+    
+                # Determine the color value based on mds_color_feature selection
                 color_choice = self.mds_color_feature.currentText()
                 if color_choice == "Dataset":
                     color_value = self.datasets[dataset_name]["color"] if dataset_name in self.datasets else 'black'
                 elif color_choice == "Age":
-                    age_val = self.get_factor_value(participant_data, "Age", (0,100))
+                    age_val = self.get_factor_value(participant_data, "Age", (0, 100))
                     if age_val is None:
+                        continue
+                    # Get current age filter from the slider
+                    lo_age = self.mds_age_slider.first_position
+                    hi_age = self.mds_age_slider.second_position
+                    # Only include participant if Age is within the slider range
+                    if not (lo_age <= float(age_val) <= hi_age):
                         continue
                     color_value = float(age_val)
                 else:
                     # Custom numeric column case
-                    custom_val = self.get_factor_value(participant_data, color_choice, (0,100))
+                    custom_val = self.get_factor_value(participant_data, color_choice, (0, 100))
                     if custom_val is None:
                         continue
                     color_value = float(custom_val)
+    
+                all_participant_data.append(features)
+                all_participant_ids.append(participant)
+                all_dataset_names.append(dataset_name)
                 all_feature_values.append(color_value)
     
         if not all_participant_data:
@@ -1171,9 +1188,9 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         embedding = mds_model.fit_transform(np.array(all_participant_data))
     
         if self.mds_color_feature.currentText() == "Dataset":
-            colors_for_points = [self.datasets[ds]["color"] if ds in self.datasets else 'black' for ds in all_dataset_names]
-            scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
-                                 c=colors_for_points, s=50)
+            colors_for_points = [self.datasets[ds]["color"] if ds in self.datasets else 'black'
+                                 for ds in all_dataset_names]
+            scatter = ax.scatter(embedding[:, 0], embedding[:, 1], c=colors_for_points, s=50)
             unique_datasets = list(dict.fromkeys(all_dataset_names))
             handles = []
             for ds in unique_datasets:
@@ -1184,7 +1201,6 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         else:
             scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
                                  c=all_feature_values, cmap='viridis', s=50)
-            # Add colorbar with the appropriate label (e.g. "Age")
             self.figure.colorbar(scatter, ax=ax, label=self.mds_color_feature.currentText())
     
         ax.set_title("MDS Plot")
@@ -1198,25 +1214,27 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.canvas.draw()
     
     def handle_custom_mds_feature(self, text):
-        """Handle selection of custom column for MDS coloring"""
+        if text == "Age":
+            self.mds_age_slider.setVisible(True)
+        else:
+            self.mds_age_slider.setVisible(False)
         if text == "Custom Column...":
             # Get currently selected dataset
             selected_items = self.dataset_list.selectedItems()
             if not selected_items:
                 QMessageBox.warning(self, "No Dataset", "Please select a dataset first.")
                 return
-
+    
             dataset_name = selected_items[0].text()
             data = self.datasets[dataset_name]["data"]
             all_columns = data.columns.tolist()
-
+    
             # Let user pick a column
             column, ok = QInputDialog.getItem(self, "Select Column", 
                                            "Choose a column for coloring MDS plot:", 
                                            all_columns, 0, False)
             if ok:
-                # Update the selector text to show this chosen column
-                self.mds_color_feature.blockSignals(True)  # Prevent recursion
+                self.mds_color_feature.blockSignals(True)
                 self.mds_color_feature.setCurrentText(column)
                 self.mds_color_feature.blockSignals(False)
 
