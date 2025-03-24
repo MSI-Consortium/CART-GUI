@@ -1120,7 +1120,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         all_participant_data = []
         all_participant_ids = []
         all_dataset_names = []
-        all_feature_values = []
+        all_feature_values = []  # Will store either dataset color or a numeric value (e.g. Age)
     
         for item in selected_items:
             dataset_name = item.text()
@@ -1138,17 +1138,30 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     except (ValueError, TypeError):
                         f_val = np.nan
                     features.append(f_val)
+                # If only one feature was selected (e.g., Age), duplicate it so MDS has 2 dims.
+                if len(features) == 1:
+                    features = features * 2
                 if any(np.isnan(features)):
                     continue
                 all_participant_data.append(features)
                 all_participant_ids.append(participant)
                 all_dataset_names.append(dataset_name)
-                # Use the dataset’s chosen color here.
-                if dataset_name in self.datasets:
-                    color_value = self.datasets[dataset_name]["color"]
+                # Determine color value based on mds_color_feature selection
+                color_choice = self.mds_color_feature.currentText()
+                if color_choice == "Dataset":
+                    color_value = self.datasets[dataset_name]["color"] if dataset_name in self.datasets else 'black'
+                elif color_choice == "Age":
+                    age_val = self.get_factor_value(participant_data, "Age", (0,100))
+                    if age_val is None:
+                        continue
+                    color_value = float(age_val)
                 else:
-                    color_value = 'black'
-                all_feature_values.append(color_value)  # Not used for colormap but for point color
+                    # Custom numeric column case
+                    custom_val = self.get_factor_value(participant_data, color_choice, (0,100))
+                    if custom_val is None:
+                        continue
+                    color_value = float(custom_val)
+                all_feature_values.append(color_value)
     
         if not all_participant_data:
             QMessageBox.warning(self, "Insufficient Data", "Not enough valid participant data for MDS.")
@@ -1158,24 +1171,20 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         embedding = mds_model.fit_transform(np.array(all_participant_data))
     
         if self.mds_color_feature.currentText() == "Dataset":
-            # Use dataset color from each point
             colors_for_points = [self.datasets[ds]["color"] if ds in self.datasets else 'black' for ds in all_dataset_names]
             scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
                                  c=colors_for_points, s=50)
-            # Create legend mapping unique datasets to their chosen colors
             unique_datasets = list(dict.fromkeys(all_dataset_names))
             handles = []
             for ds in unique_datasets:
-                if ds in self.datasets:
-                    col = self.datasets[ds]["color"]
-                else:
-                    col = 'black'
+                col = self.datasets[ds]["color"] if ds in self.datasets else 'black'
                 handles.append(plt.Line2D([0], [0], marker='o', color='w',
                                            markerfacecolor=col, markersize=8, label=ds))
             ax.legend(handles=handles, title="Dataset")
         else:
             scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
-                                 cmap='viridis', s=50)
+                                 c=all_feature_values, cmap='viridis', s=50)
+            # Add colorbar with the appropriate label (e.g. "Age")
             self.figure.colorbar(scatter, ax=ax, label=self.mds_color_feature.currentText())
     
         ax.set_title("MDS Plot")
