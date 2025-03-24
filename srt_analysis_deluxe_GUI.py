@@ -35,16 +35,28 @@ class RangeSlider(QWidget):
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
+        # Create first slider with label above it
         self.first_slider = QSlider(Qt.Horizontal)
         self.first_slider.setRange(0, 100)
         self.first_slider.setValue(0)
+        self.first_label = QLabel(str(self.first_slider.value()))
+        self.first_label.setAlignment(Qt.AlignCenter)
+        vbox_first = QVBoxLayout()
+        vbox_first.addWidget(self.first_label)
+        vbox_first.addWidget(self.first_slider)
 
+        # Create second slider with label above it
         self.second_slider = QSlider(Qt.Horizontal)
         self.second_slider.setRange(0, 100)
         self.second_slider.setValue(100)
+        self.second_label = QLabel(str(self.second_slider.value()))
+        self.second_label.setAlignment(Qt.AlignCenter)
+        vbox_second = QVBoxLayout()
+        vbox_second.addWidget(self.second_label)
+        vbox_second.addWidget(self.second_slider)
 
-        self.layout.addWidget(self.first_slider)
-        self.layout.addWidget(self.second_slider)
+        self.layout.addLayout(vbox_first)
+        self.layout.addLayout(vbox_second)
 
         self.first_slider.valueChanged.connect(self.on_first_slider_value_changed)
         self.second_slider.valueChanged.connect(self.on_second_slider_value_changed)
@@ -54,6 +66,8 @@ class RangeSlider(QWidget):
             self.first_slider.setValue(self.second_slider.value())
             return
         self.first_position = value
+        # Update label for first slider
+        self.first_label.setText(str(value))
         self.valueChanged.emit(self.first_position, self.second_position)
 
     def on_second_slider_value_changed(self, value):
@@ -61,6 +75,8 @@ class RangeSlider(QWidget):
             self.second_slider.setValue(self.first_slider.value())
             return
         self.second_position = value
+        # Update label for second slider
+        self.second_label.setText(str(value))
         self.valueChanged.emit(self.first_position, self.second_position)
 
     def setRange(self, start, end):
