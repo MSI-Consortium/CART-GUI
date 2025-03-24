@@ -1215,21 +1215,20 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
     def handle_custom_mds_feature(self, text):
         if text == "Age":
+            # Ensure the slider is large enough and visible
+            self.mds_age_slider.setMinimumHeight(30)
             self.mds_age_slider.setVisible(True)
+            self.mds_age_slider.show()
         else:
             self.mds_age_slider.setVisible(False)
         if text == "Custom Column...":
-            # Get currently selected dataset
             selected_items = self.dataset_list.selectedItems()
             if not selected_items:
                 QMessageBox.warning(self, "No Dataset", "Please select a dataset first.")
                 return
-    
             dataset_name = selected_items[0].text()
             data = self.datasets[dataset_name]["data"]
             all_columns = data.columns.tolist()
-    
-            # Let user pick a column
             column, ok = QInputDialog.getItem(self, "Select Column", 
                                            "Choose a column for coloring MDS plot:", 
                                            all_columns, 0, False)
