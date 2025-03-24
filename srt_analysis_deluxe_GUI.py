@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QFormLayout, QHBoxLayout, QMessageBox,QFrame,
     QLineEdit, QRadioButton, QButtonGroup, QDialog, QTextEdit, QCheckBox, QTableWidget,
     QTableWidgetItem, QSpinBox, QSlider, QFileDialog, QRadioButton, QButtonGroup, QScrollArea, QListWidget, QInputDialog,
-    QTabWidget, QGroupBox 
+    QTabWidget, QGroupBox, QListWidgetItem , QColorDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -97,185 +97,169 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle("SRT Analysis GUI")
-        self.setGeometry(100, 100, 1300, 600)
-
+        self.setGeometry(100, 100, 1300, 700)
+    
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
-
-        # Create a horizontal layout for the main widget
         main_layout = QHBoxLayout(self.main_widget)
-
-        # Create a widget for the left side (controls)
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-
-        # Add dataset management controls to top of left side
+    
+        # Create a QTabWidget on the left for controls
+        self.controls_tabs = QTabWidget()
+        self.controls_tabs.setMinimumWidth(450)
+        self.controls_tabs.setTabPosition(QTabWidget.West)
+    
+        # -----------------------------
+        # Data Tab (Dataset & Participant Controls)
+        # -----------------------------
+        data_tab = QWidget()
+        data_layout = QVBoxLayout(data_tab)
+    
+        # Dataset management group
         dataset_controls = QWidget()
         dataset_layout = QVBoxLayout(dataset_controls)
-        
-        # Dataset list
         self.dataset_list = QListWidget()
-        self.dataset_list.setSelectionMode(QListWidget.ExtendedSelection)  # Enables Ctrl/Cmd-click for multiple selections
-        self.dataset_list.setMinimumHeight(100)  # Optional: ensure list is tall enough to show multiple items
+        self.dataset_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.dataset_list.setMinimumHeight(100)
         self.dataset_list.itemSelectionChanged.connect(self.on_dataset_selection_changed)
-        
-        # Dataset buttons
+    
+        # Dataset buttons layout
         dataset_buttons = QHBoxLayout()
         self.load_dataset_button = QPushButton('Load Dataset', self)
         self.load_dataset_button.clicked.connect(self.load_dataset)
         self.remove_dataset_button = QPushButton('Remove Dataset', self)
         self.remove_dataset_button.clicked.connect(self.remove_dataset)
-        self.combine_datasets_button = QPushButton('Combine Datasets', self) # New button
-        self.combine_datasets_button.clicked.connect(self.combine_datasets) # New connection
+        self.combine_datasets_button = QPushButton('Combine Datasets', self)
+        self.combine_datasets_button.clicked.connect(self.combine_datasets)
         self.format_csv_button = QPushButton('Format CSV', self)
         self.format_csv_button.clicked.connect(self.open_csv_for_formatting)
-        
         dataset_buttons.addWidget(self.load_dataset_button)
         dataset_buttons.addWidget(self.remove_dataset_button)
-        dataset_buttons.addWidget(self.combine_datasets_button) # Add to layout
+        dataset_buttons.addWidget(self.combine_datasets_button)
         dataset_buttons.addWidget(self.format_csv_button)
-
-        
+    
         dataset_layout.addWidget(QLabel("Loaded Datasets:"))
         dataset_layout.addWidget(self.dataset_list)
         dataset_layout.addLayout(dataset_buttons)
-        
-        left_layout.insertWidget(0, dataset_controls)
-
-        # Participant Selector
+        data_layout.addWidget(dataset_controls)
+    
+        # Participant selector & exclusion
         self.participant_selector = QComboBox(self)
         self.participant_selector.currentIndexChanged.connect(self.update_participant_settings)
-        left_layout.addWidget(self.participant_selector)
-
-        # Add Exclude Participants Button
+        data_layout.addWidget(self.participant_selector)
         self.exclude_participants_button = QPushButton('Exclude Participants', self)
         self.exclude_participants_button.clicked.connect(self.open_participant_selection_dialog)
-        left_layout.addWidget(self.exclude_participants_button)
+        data_layout.addWidget(self.exclude_participants_button)
+        # Initially hide the exclude participants button
         self.exclude_participants_button.setVisible(False)
-
-        # Create horizontal layout for exclusion buttons
-        exclusion_buttons_layout = QHBoxLayout()
         
-        # Exclude Trials Button
+        # Exclusion buttons (trials and undo)
+        exclusion_buttons_layout = QHBoxLayout()
         self.exclude_trials_button = QPushButton('Exclude Trials', self)
         self.exclude_trials_button.clicked.connect(self.exclude_trials_dialog)
         exclusion_buttons_layout.addWidget(self.exclude_trials_button)
-        
-        # Undo Exclusions Button
         self.undo_exclusions_button = QPushButton('Undo All Exclusions', self)
         self.undo_exclusions_button.clicked.connect(self.undo_exclusions)
-        self.undo_exclusions_button.setEnabled(False)  # Initially disabled
+        self.undo_exclusions_button.setEnabled(False)
         exclusion_buttons_layout.addWidget(self.undo_exclusions_button)
-        
-        left_layout.addLayout(exclusion_buttons_layout)
+        data_layout.addLayout(exclusion_buttons_layout)
         self.exclude_trials_button.setVisible(False)
         self.undo_exclusions_button.setVisible(False)
-
-             # Statistical Test Toggle
-        self.test_group = QButtonGroup(self)
+        data_layout.addStretch()
+    
+        self.controls_tabs.addTab(data_tab, "Data")
+    
+        # -----------------------------
+        # Analysis Tab (Plotting, Stats, Models, Scatter & MDS)
+        # -----------------------------
+        analysis_tab = QWidget()
+        analysis_layout = QVBoxLayout(analysis_tab)
+    
+        # Statistical test group (Radio buttons and checkboxes)
+        stats_controls_layout = QHBoxLayout()
+        stats_controls_layout.addWidget(QLabel("Statistical Test:"))
         self.ttest_radio = QRadioButton("T-Test", self)
         self.bayes_radio = QRadioButton("Bayes Factor", self)
+        self.ttest_radio.setChecked(True)
+        self.test_group = QButtonGroup(self)
         self.test_group.addButton(self.ttest_radio)
         self.test_group.addButton(self.bayes_radio)
-        self.ttest_radio.setChecked(True)
-        
-        # Create single horizontal layout for all stats controls
-        stats_controls_layout = QHBoxLayout()
-        
-        # Add radio buttons with label
-        stats_controls_layout.addWidget(QLabel("Statistical Test:"))
         stats_controls_layout.addWidget(self.ttest_radio)
         stats_controls_layout.addWidget(self.bayes_radio)
-        
-        # Add some spacing between radio buttons and checkboxes
         stats_controls_layout.addSpacing(20)
-        
-        # Add vertical line separator
+        # Vertical separator
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
         separator.setFrameShadow(QFrame.Sunken)
         stats_controls_layout.addWidget(separator)
-        
-        # Add some spacing after separator
         stats_controls_layout.addSpacing(20)
-        
-        # Add checkboxes
         self.between_stats_checkbox = QCheckBox("Between-Dataset Stats", self)
         self.within_stats_checkbox = QCheckBox("Within-Dataset Stats", self)
         self.between_stats_checkbox.setChecked(True)
         self.within_stats_checkbox.setChecked(False)
         stats_controls_layout.addWidget(self.between_stats_checkbox)
         stats_controls_layout.addWidget(self.within_stats_checkbox)
-        
-        # Add the combined layout to main layout
-        left_layout.addLayout(stats_controls_layout)
-
-        # Create horizontal layout for plot buttons
+        analysis_layout.addLayout(stats_controls_layout)
+    
+        # Plotting buttons: RT Plots
         plot_buttons_layout = QHBoxLayout()
-        
-        # Plot RT Buttons group
         self.plot_mean_button = QPushButton('Mean RTs', self)
         self.plot_mean_button.clicked.connect(self.plot_mean_rts)
         self.plot_median_button = QPushButton('Median RTs', self)
         self.plot_median_button.clicked.connect(self.plot_median_rts)
         self.plot_boxplot_button = QPushButton('Boxplot RTs', self)
         self.plot_boxplot_button.clicked.connect(self.plot_boxplot_rts)
-        
-        # Add buttons to horizontal layout
         plot_buttons_layout.addWidget(self.plot_mean_button)
         plot_buttons_layout.addWidget(self.plot_median_button)
         plot_buttons_layout.addWidget(self.plot_boxplot_button)
-        
-        # Add horizontal layout to main left layout
-        left_layout.addLayout(plot_buttons_layout)
-
-        # Y-axis Inputs
+        analysis_layout.addLayout(plot_buttons_layout)
+    
+        # Y-axis input controls
         yaxis_layout = QHBoxLayout()
-        ymin_label = QLabel('Y-axis Min:')
+        yaxis_layout.addWidget(QLabel('Y-axis Min:'))
         self.ymin_input = QLineEdit(self)
         self.ymin_input.setFixedWidth(50)
         self.ymin_input.setText('0')
-        ymax_label = QLabel('Y-axis Max:')
+        yaxis_layout.addWidget(self.ymin_input)
+        yaxis_layout.addWidget(QLabel('Y-axis Max:'))
         self.ymax_input = QLineEdit(self)
         self.ymax_input.setFixedWidth(50)
         self.ymax_input.setText('1000')
-
-        yaxis_layout.addWidget(ymin_label)
-        yaxis_layout.addWidget(self.ymin_input)
-        yaxis_layout.addWidget(ymax_label)
         yaxis_layout.addWidget(self.ymax_input)
-
-        left_layout.addLayout(yaxis_layout)
-
+        analysis_layout.addLayout(yaxis_layout)
+    
+        # Additional Plot Buttons
         self.plot_distribution_button = QPushButton('Plot Participant Distribution', self)
         self.plot_distribution_button.clicked.connect(self.plot_participant_distribution)
-        left_layout.addWidget(self.plot_distribution_button)
-
-        # ANOVA Button
+        analysis_layout.addWidget(self.plot_distribution_button)
         self.anova_button = QPushButton('Perform ANOVA', self)
         self.anova_button.clicked.connect(self.perform_anova_analysis)
-        left_layout.addWidget(self.anova_button)
-
-        # Race Model Selector and Parameters
+        analysis_layout.addWidget(self.anova_button)
+    
+        # Race Model selector & parameter widgets
         self.model_selector = QComboBox(self)
         self.model_selector.addItems(["Standard Race Model", "Coactivation Model",
                                       "Parallel Interactive Race Model",
                                       "Multisensory Response Enhancement Model",
                                       "Permutation Test"])
         self.model_selector.currentIndexChanged.connect(self.update_model_settings)
-        left_layout.addWidget(self.model_selector)
-
-        # Create widgets for model parameters
+        analysis_layout.addWidget(self.model_selector)
+        # Create model parameter widgets (they will be hidden/shown as needed)
         self.create_model_parameter_widgets()
-        left_layout.addWidget(self.coactivation_widget)
-        left_layout.addWidget(self.pir_widget)
-        left_layout.addWidget(self.mre_widget)
-        left_layout.addWidget(self.permutation_widget)
+        analysis_layout.addWidget(self.coactivation_widget)
+        analysis_layout.addWidget(self.pir_widget)
+        analysis_layout.addWidget(self.mre_widget)
+        analysis_layout.addWidget(self.permutation_widget)
+        self.use_permutation_test_checkbox = QCheckBox("Use permutation test for statistical validation", self)
+        self.use_permutation_test_checkbox.setToolTip("When checked, a permutation test will be performed to assess statistical significance of race model violations")
+        self.use_permutation_test_checkbox.setChecked(False)
+        self.use_permutation_test_checkbox.stateChanged.connect(self.toggle_permutation_parameters)
+        analysis_layout.addWidget(self.use_permutation_test_checkbox)
+        analysis_layout.addWidget(self.permutation_options_widget)
         self.more_info_button = QPushButton('Race Model Selection More Info', self)
         self.more_info_button.clicked.connect(self.show_more_info)
-        left_layout.addWidget(self.more_info_button)
-
-        # Add button next to plot race model button
+        analysis_layout.addWidget(self.more_info_button)
+    
+        # Race Model Plot buttons
         race_model_layout = QHBoxLayout()
         self.plot_race_model_button = QPushButton('Plot Race Model', self)
         self.plot_race_model_button.clicked.connect(self.plot_race_model)
@@ -285,127 +269,102 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         race_model_layout.addWidget(self.plot_race_model_button)
         race_model_layout.addWidget(self.plot_violations_button)
         race_model_layout.addWidget(self.use_percentiles_checkbox)
-        left_layout.addLayout(race_model_layout)
-        
-        # Add permutation test checkbox and options
-        left_layout.addWidget(self.use_permutation_test_checkbox)
-        left_layout.addWidget(self.permutation_options_widget)
-
-        # Scatter Plot Controls
+        analysis_layout.addLayout(race_model_layout)
+    
+        # Scatter Plot Controls & percentile slider
         scatter_layout = QHBoxLayout()
         self.factor1_selector = QComboBox(self)
         self.factor2_selector = QComboBox(self)
         base_factors = ['Age', 'Interquartile Range (Total)', 'Interquartile Range (Audio)',
                         'Interquartile Range (Visual)', 'Interquartile Range (Audiovisual)',
                         'Race Violations', 'Total Trials', 'Mean RT (Audio)', 'Mean RT (Visual)',
-                        'Mean RT (Audiovisual)','Median RT (Audio)','Median RT (Visual)','Median RT (Audiovisual)',
-                        'Custom Column...']  # Added this line
-
+                        'Mean RT (Audiovisual)','Median RT (Audio)','Median RT (Visual)',
+                        'Median RT (Audiovisual)','Custom Column...']
         for selector in [self.factor1_selector, self.factor2_selector]:
             selector.clear()
             selector.addItems(base_factors)
             selector.currentTextChanged.connect(self.update_slider_visibility)
-            selector.currentTextChanged.connect(self.handle_custom_factor_selection)  # New line to handle custom factor
-
-
+            selector.currentTextChanged.connect(self.handle_custom_factor_selection)
         scatter_layout.addWidget(QLabel("Factor 1:"))
         scatter_layout.addWidget(self.factor1_selector)
         scatter_layout.addWidget(QLabel("Factor 2:"))
         scatter_layout.addWidget(self.factor2_selector)
-        left_layout.addLayout(scatter_layout)
-
-        # Add legend toggle checkbox
+        analysis_layout.addLayout(scatter_layout)
+    
         self.show_legend_checkbox = QCheckBox('Show Legend', self)
         self.show_legend_checkbox.setChecked(True)
-        left_layout.addWidget(self.show_legend_checkbox)
-
-        # Percentile Range Slider
+        analysis_layout.addWidget(self.show_legend_checkbox)
+    
+        # Percentile Range Slider (for Race Model and scatter plots)
+        self.percentile_range_slider_label = QLabel('Include Trials Within CDF Range: 0% - 100%\n(trials outside range will be excluded)', self)
+        self.percentile_range_slider_label.setWordWrap(True)
         self.percentile_range_slider = RangeSlider(self)
         self.percentile_range_slider.setRange(0, 100)
         self.percentile_range_slider.setStart(0)
         self.percentile_range_slider.setEnd(100)
-        # Create the label before using it
-        self.percentile_range_slider_label = QLabel('Include Trials Within CDF Range: 0% - 100%\n(trials outside range will be excluded)', self)
-        self.percentile_range_slider_label.setWordWrap(True)  # Allow text wrapping
         self.percentile_range_slider.valueChanged.connect(self.update_percentile_range_label)
-        
-        left_layout.addWidget(self.percentile_range_slider_label)
-        left_layout.addWidget(self.percentile_range_slider)
-
+        analysis_layout.addWidget(self.percentile_range_slider_label)
+        analysis_layout.addWidget(self.percentile_range_slider)
+    
+        # Scatter Plot button and sync-axes option
         scatter_button_layout = QHBoxLayout()
         self.plot_scatter_button = QPushButton('Scatter Plot', self)
         self.plot_scatter_button.clicked.connect(self.plot_scatter)
         self.sync_axes_checkbox = QCheckBox('Sync Axes', self)
         scatter_button_layout.addWidget(self.plot_scatter_button)
         scatter_button_layout.addWidget(self.sync_axes_checkbox)
-        left_layout.addLayout(scatter_button_layout)
-
-        # Add MDS Plot controls
+        analysis_layout.addLayout(scatter_button_layout)
+        
+        # MDS Controls
         mds_group = QGroupBox("Multidimensional Scaling (MDS)")
         mds_layout = QVBoxLayout(mds_group)
-        
         mds_options = QHBoxLayout()
         self.mds_color_feature = QComboBox(self)
         self.mds_color_feature.addItems(['Dataset', 'Age', 'Custom Column...'])
         self.mds_color_feature.currentTextChanged.connect(self.handle_custom_mds_feature)
-        
         self.plot_mds_button = QPushButton('MDS Plot', self)
         self.plot_mds_button.clicked.connect(self.plot_mds)
-        
         mds_options.addWidget(QLabel("Color by:"))
         mds_options.addWidget(self.mds_color_feature)
         mds_options.addWidget(self.plot_mds_button)
-        
+        mds_layout.addLayout(mds_options)
         mds_desc = QLabel("Visualizes participants in 2D space based on reaction time patterns")
         mds_desc.setWordWrap(True)
-        
-        mds_layout.addLayout(mds_options)
         mds_layout.addWidget(mds_desc)
-        
-        left_layout.addWidget(mds_group)
-        # Add a stretch to push everything to the top
-        left_layout.addStretch()
-
-        # Create a widget for the right side (figure and explanation)
+        analysis_layout.addWidget(mds_group)
+    
+        analysis_layout.addStretch()
+        self.controls_tabs.addTab(analysis_tab, "Analysis")
+    
+        # Add the controls tab widget (left side) and the plotting canvas (right side)
+        main_layout.addWidget(self.controls_tabs, 0)
+    
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-
         self.figure = plt.figure(figsize=(8, 5))
         self.canvas = FigureCanvas(self.figure)
         right_layout.addWidget(self.canvas)
-
         self.save_figure_button = QPushButton('Save Figure', self)
         self.save_figure_button.clicked.connect(self.save_figure)
         right_layout.addWidget(self.save_figure_button)
-
-        # Replace QLabel with QTextEdit for scrollable explanation
         self.explanation_label = QTextEdit()
         self.explanation_label.setReadOnly(True)
-        self.explanation_label.setFixedHeight(150)  # Set fixed height
-        self.explanation_label.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.explanation_label.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.explanation_label.setFixedHeight(150)
         right_layout.addWidget(self.explanation_label)
-
         self.anova_table = QTableWidget()
         self.anova_table.setVisible(False)
         right_layout.addWidget(self.anova_table)
-
         self.save_figure_data_button = QPushButton('Save Figure Data', self)
         self.save_figure_data_button.clicked.connect(self.save_figure_data)
         right_layout.addWidget(self.save_figure_data_button)
-
         self.outlier_report = QTextEdit(self)
         self.outlier_report.setReadOnly(True)
-        self.outlier_report.setMaximumHeight(100)  # Limit the height
+        self.outlier_report.setMaximumHeight(100)
         self.outlier_report.setVisible(False)
-        right_layout.addWidget(self.outlier_report)  # Add to right layout after the canvas
-
-        # Add the left and right widgets to the main layout
-        main_layout.addWidget(left_widget)
-        main_layout.addWidget(right_widget)
-
+        right_layout.addWidget(self.outlier_report)
+        
+        main_layout.addWidget(right_widget, 1)
         self.show()
-
     def create_model_parameter_widgets(self):
         # Coactivation Model parameters
         self.coactivation_widget = QWidget(self)
@@ -1102,128 +1061,131 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         shade_step = 0.4  # Increased from 0.2 for more contrast
         alpha = 1.0 - (dataset_index * shade_step)
         return self.adjust_lightness(base_color, alpha)
+    
+    def prompt_mds_features(self):
+        """Prompt the user to select features to include in the MDS analysis."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select MDS Features")
+        layout = QVBoxLayout(dialog)
+        instruction = QLabel("Select features to include in the MDS embedding:")
+        layout.addWidget(instruction)
+
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QListWidget.MultiSelection)
+        # Use available features
+        for feat in self.get_available_features():
+            item = QListWidgetItem(feat)
+            list_widget.addItem(item)
+            # Pre-select defaults (for computed features) if they are present
+            if feat in ['Interquartile Range (Audio)', 'Interquartile Range (Visual)',
+                        'Interquartile Range (Audiovisual)', 'Median RT (Audio)',
+                        'Median RT (Visual)', 'Median RT (Audiovisual)']:
+                item.setSelected(True)
+        layout.addWidget(list_widget)
+
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("OK")
+        cancel_button = QPushButton("Cancel")
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+
+        ok_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+        if dialog.exec_() == QDialog.Accepted:
+            selected = [item.text() for item in list_widget.selectedItems()]
+            if "Custom Column..." in selected:
+                custom_col, ok = QInputDialog.getText(self, "Custom Column",
+                                                      "Enter the name of the custom column:")
+                if ok and custom_col:
+                    selected = [custom_col if x=="Custom Column..." else x for x in selected]
+            return selected
+        else:
+            return None
 
     def plot_mds(self):
-        """
-        Plot Multidimensional Scaling (MDS) to visualize participants in 2D space
-        based on their reaction time patterns.
-        """
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
             QMessageBox.warning(self, "No Selection", "Please select at least one dataset.")
             return
-
+    
+        mds_features = self.prompt_mds_features()
+        if not mds_features:
+            return
+    
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         self.current_figure_type = 'mds'
-
-        # Get color feature (e.g., Age, Dataset, or a custom column)
-        color_feature = self.mds_color_feature.currentText()
-
-        # Prepare data for MDS
+    
         all_participant_data = []
         all_participant_ids = []
         all_dataset_names = []
         all_feature_values = []
-
+    
         for item in selected_items:
             dataset_name = item.text()
             data = self.get_filtered_data(dataset_name)
             if data is None:
                 continue
-
             participants = data['participant_number'].unique()
             for participant in participants:
                 participant_data = data[data['participant_number'] == participant]
-
-                # Create feature vector for this participant:
-                # - IQR for each modality
-                # - Median RT for each modality
-                # - Variance for each modality
                 features = []
-                for modality in [1, 2, 3]:
-                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
-                    if len(rt) > 1:
-                        q75, q25 = np.percentile(rt, [75, 25])
-                        features.append(q75 - q25)
-                    else:
-                        features.append(np.nan)
-                for modality in [1, 2, 3]:
-                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
-                    if len(rt) > 0:
-                        features.append(rt.median())
-                    else:
-                        features.append(np.nan)
-                for modality in [1, 2, 3]:
-                    rt = participant_data[participant_data['modality'] == modality]['reaction_time']
-                    if len(rt) > 1:
-                        features.append(rt.var())
-                    else:
-                        features.append(np.nan)
-
-                # Skip this participant if any feature is missing
+                for feat in mds_features:
+                    value = self.get_factor_value(participant_data, feat, (0,100))
+                    try:
+                        f_val = float(value)
+                    except (ValueError, TypeError):
+                        f_val = np.nan
+                    features.append(f_val)
                 if any(np.isnan(features)):
                     continue
-
                 all_participant_data.append(features)
                 all_participant_ids.append(participant)
                 all_dataset_names.append(dataset_name)
-
-                # Determine value for coloring based on the selected feature
-                if color_feature == "Age":
-                    # Use 'SubjectAge' if available; otherwise, try 'Age'
-                    col = "SubjectAge" if "SubjectAge" in participant_data.columns else "Age"
-                    try:
-                        val = float(participant_data[col].iloc[0])
-                    except ValueError:
-                        val = 0
-                elif color_feature in participant_data.columns:
-                    try:
-                        val = float(participant_data[color_feature].iloc[0])
-                    except ValueError:
-                        val = 0
-                elif color_feature == "Dataset":
-                    val = None
+                # Use the dataset’s chosen color here.
+                if dataset_name in self.datasets:
+                    color_value = self.datasets[dataset_name]["color"]
                 else:
-                    val = 0
-                all_feature_values.append(val)
-
+                    color_value = 'black'
+                all_feature_values.append(color_value)  # Not used for colormap but for point color
+    
         if not all_participant_data:
             QMessageBox.warning(self, "Insufficient Data", "Not enough valid participant data for MDS.")
             return
-
-        # Perform MDS embedding
+    
         mds_model = MDS(n_components=2, random_state=42)
         embedding = mds_model.fit_transform(np.array(all_participant_data))
-
-        # If coloring by "Dataset", assign each dataset a distinct RGB color.
-        if color_feature == "Dataset":
-            colors_list = list(mcolors.TABLEAU_COLORS.values())
-            # Create a mapping from dataset name to a distinct color.
-            dataset_names_unique = list(dict.fromkeys(all_dataset_names))
-            dataset_color_map = {name: colors_list[i % len(colors_list)]
-                                 for i, name in enumerate(dataset_names_unique)}
-            colors_for_points = [dataset_color_map[ds] for ds in all_dataset_names]
+    
+        if self.mds_color_feature.currentText() == "Dataset":
+            # Use dataset color from each point
+            colors_for_points = [self.datasets[ds]["color"] if ds in self.datasets else 'black' for ds in all_dataset_names]
             scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
                                  c=colors_for_points, s=50)
-            ax.legend(handles=[plt.Line2D([0], [0], marker='o', color='w',
-                                           markerfacecolor=dataset_color_map[name],
-                                           markersize=8, label=name)
-                               for name in dataset_names_unique],
-                      title="Dataset")
+            # Create legend mapping unique datasets to their chosen colors
+            unique_datasets = list(dict.fromkeys(all_dataset_names))
+            handles = []
+            for ds in unique_datasets:
+                if ds in self.datasets:
+                    col = self.datasets[ds]["color"]
+                else:
+                    col = 'black'
+                handles.append(plt.Line2D([0], [0], marker='o', color='w',
+                                           markerfacecolor=col, markersize=8, label=ds))
+            ax.legend(handles=handles, title="Dataset")
         else:
             scatter = ax.scatter(embedding[:, 0], embedding[:, 1],
-                                 c=all_feature_values, cmap='viridis', s=50)
-            self.figure.colorbar(scatter, ax=ax, label=color_feature)
-        
+                                 cmap='viridis', s=50)
+            self.figure.colorbar(scatter, ax=ax, label=self.mds_color_feature.currentText())
+    
         ax.set_title("MDS Plot")
-        ax.set_xlabel(" Rep. Dimension 1")
-        ax.set_ylabel("Rep. Dimension 2")
+        ax.set_xlabel("Dimension 1")
+        ax.set_ylabel("Dimension 2")
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.set_xticks([])
         ax.set_yticks([])
-            
+    
         self.canvas.draw()
     
     def handle_custom_mds_feature(self, text):
@@ -2260,6 +2222,47 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.figure.tight_layout()
         self.canvas.draw()
     
+    def get_available_features(self):
+        """
+        Return a list of base features filtered by the union of columns
+        in the currently selected dataset(s). Computed features (those that
+        rely on 'reaction_time' and 'modality') are returned only if available.
+        """
+        # Base features as before
+        base_features = [
+            'Age', 'Interquartile Range (Total)', 'Interquartile Range (Audio)',
+            'Interquartile Range (Visual)', 'Interquartile Range (Audiovisual)',
+            'Race Violations', 'Total Trials', 'Mean RT (Audio)', 'Mean RT (Visual)',
+            'Mean RT (Audiovisual)', 'Median RT (Audio)', 'Median RT (Visual)',
+            'Median RT (Audiovisual)', 'Custom Column...'
+        ]
+        union_cols = set()
+        selected = self.dataset_list.selectedItems()
+        if not selected:
+            return base_features  # fallback if none are selected
+        for item in selected:
+            data = self.get_filtered_data(item.text())
+            if data is not None:
+                union_cols.update(data.columns.tolist())
+        available = []
+        for feat in base_features:
+            if feat == "Custom Column...":
+                available.append(feat)
+            elif feat in ['Interquartile Range (Total)', 'Interquartile Range (Audio)',
+                          'Interquartile Range (Visual)', 'Interquartile Range (Audiovisual)',
+                          'Race Violations', 'Total Trials', 'Mean RT (Audio)', 'Mean RT (Visual)',
+                          'Mean RT (Audiovisual)', 'Median RT (Audio)', 'Median RT (Visual)',
+                          'Median RT (Audiovisual)']:
+                if 'reaction_time' in union_cols and 'modality' in union_cols:
+                    available.append(feat)
+                # else omit computed features if the base columns are missing.
+            elif feat == "Age":
+                if ('SubjectAge' in union_cols) or ('Age' in union_cols):
+                    available.append(feat)
+            else:
+                available.append(feat)
+        return available
+
     def plot_race_violations(self):
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
@@ -2653,6 +2656,17 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Return mean violation within the specified range, along with all distributions
         return np.mean(violations[lower_idx:upper_idx]), common_rts, ecdf_a, ecdf_v, ecdf_av, race_model
 
+    def update_scatter_feature_selectors(self):
+        available = self.get_available_features()
+        for selector in [self.factor1_selector, self.factor2_selector]:
+            current = selector.currentText()
+            selector.blockSignals(True)
+            selector.clear()
+            selector.addItems(available)
+            # Restore prior selection if it is still available
+            if current in available:
+                selector.setCurrentText(current)
+            selector.blockSignals(False)
 
     def update_slider_visibility(self):
         show_sliders = 'Race Violations' in [self.factor1_selector.currentText(), self.factor2_selector.currentText()]
@@ -2669,6 +2683,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             data = participant_data[participant_data['modality'] == modality]['reaction_time']
         else:
             data = participant_data['reaction_time']
+        if data.empty:
+            return None  # or np.nan as preferred
         q75, q25 = np.percentile(data, [75, 25])
         return q75 - q25
 
@@ -2858,8 +2874,27 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
 
     def get_factor_value(self, participant_data, factor, percentile_range):
+        # First, make sure there is any reaction time data if the factor depends on it.
+        computed_factors = [
+            'Interquartile Range (Total)', 'Interquartile Range (Audio)',
+            'Interquartile Range (Visual)', 'Interquartile Range (Audiovisual)',
+            'Race Violations', 'Mean RT (Audio)', 'Mean RT (Visual)',
+            'Mean RT (Audiovisual)', 'Median RT (Audio)', 'Median RT (Visual)',
+            'Median RT (Audiovisual)'
+        ]
+        if factor in computed_factors:
+            if ('reaction_time' not in participant_data.columns) or participant_data['reaction_time'].empty:
+                self.statusBar().showMessage("Participant missing reaction time data – skipping.", 5000)
+                return None
+
         if factor == 'Age':
-            return pd.to_numeric(participant_data['SubjectAge'].iloc[0], errors='coerce')
+            if 'SubjectAge' in participant_data.columns:
+                return pd.to_numeric(participant_data['SubjectAge'].iloc[0], errors='coerce')
+            elif 'Age' in participant_data.columns:
+                return pd.to_numeric(participant_data['Age'].iloc[0], errors='coerce')
+            else:
+                self.statusBar().showMessage("Age column not found – skipping participant.", 5000)
+                return None
         elif factor == 'Interquartile Range (Total)':
             return self.calculate_interquartile_range(participant_data)
         elif factor == 'Interquartile Range (Audio)':
@@ -2869,23 +2904,16 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         elif factor == 'Interquartile Range (Audiovisual)':
             return self.calculate_interquartile_range(participant_data, modality=3)
         elif factor == 'Race Violations':
-            # Check if all three modalities (A, V, AV) are present
-            has_a = (participant_data['modality'] == 1).any()
-            has_v = (participant_data['modality'] == 2).any()
-            has_av = (participant_data['modality'] == 3).any()
-            
-            if not (has_a and has_v and has_av):
-                # Missing one of the modalities, cannot calculate race violations
-                return None
-            
+            # Ensure all modalities exist; if not, show warning and return None.
+            for mod in [1, 2, 3]:
+                if not (participant_data['modality'] == mod).any():
+                    self.statusBar().showMessage(f"Participant {participant_data['participant_number'].iloc[0]} is missing modality {mod} data – skipping.", 5000)
+                    return None
             result = self.calculate_race_violation(participant_data, percentile_range)
-            if result is None or any(r is None for r in result):
+            if result is None:
                 return None
-            
+            # Compute cumulative violation using indices based on percentiles.
             _, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
-            if (common_rts is None) or (ecdf_av is None) or (race_model is None):
-                return None
-            
             lower_idx = np.searchsorted(ecdf_av, percentile_range[0] / 100)
             upper_idx = np.searchsorted(ecdf_av, percentile_range[1] / 100)
             cumulative_violation = np.sum(np.maximum(ecdf_av[lower_idx:upper_idx] - race_model[lower_idx:upper_idx], 0))
@@ -3381,8 +3409,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     def load_dataset(self):
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", 
-                                              "CSV Files (*.csv);;All Files (*)", 
-                                              options=options)
+                                                  "CSV Files (*.csv);;All Files (*)", 
+                                                  options=options)
         if file_path:
             dialog = QDialog(self)
             dialog.setWindowTitle("Dataset Properties")
@@ -3406,6 +3434,22 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             for pattern in patterns:
                 pattern_selector.addItem(f"{pattern} - {pattern_descriptions[pattern]}", pattern)
             layout.addRow("Bar Pattern:", pattern_selector)
+            
+            # [New] Dataset color selector (via colorwheel)
+            # Initialize with default color from tab20 colormap
+            dataset_color_dict = {"color": plt.cm.tab20(len(self.datasets) % 20)}
+            import matplotlib.colors as mcolors  # Ensure this import
+            default_color_hex = mcolors.to_hex(dataset_color_dict["color"])
+            dataset_color_button = QPushButton("Select Color")
+            dataset_color_button.setStyleSheet(f"background-color: {default_color_hex};")
+            from PyQt5.QtGui import QColor  # Import QColor for the color dialog
+            def select_color():
+                color = QColorDialog.getColor(QColor(default_color_hex), self, "Select Dataset Color")
+                if color.isValid():
+                    dataset_color_dict["color"] = color.name()
+                    dataset_color_button.setStyleSheet(f"background-color: {color.name()};")
+            dataset_color_button.clicked.connect(select_color)
+            layout.addRow("Dataset Color:", dataset_color_button)
             
             # Transparency slider
             alpha_slider = QSlider(Qt.Horizontal)
@@ -3432,20 +3476,19 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 pattern = pattern_selector.currentData()
                 alpha = alpha_slider.value() / 100.0
                 
-                # Create sample bars with different modalities
+                # Create sample bars with predefined modalities
                 x = [0, 1, 2]
                 heights = [0.7, 0.8, 0.6]
-                colors = ['red', 'blue', 'purple']
-                labels = ['Audio', 'Visual', 'AV']
+                modality_colors = ['red', 'blue', 'purple']
+                modality_labels = ['Audio', 'Visual', 'AV']
                 
-                for i, (height, color, label) in enumerate(zip(heights, colors, labels)):
+                for i, (height, color, label) in enumerate(zip(heights, modality_colors, modality_labels)):
                     bar = ax.bar(x[i], height, width=0.8, 
-                                color='white' if pattern != 'solid' else color,
-                                edgecolor=color,
-                                alpha=alpha,
-                                label=label)
+                                 color='white' if pattern != 'solid' else color,
+                                 edgecolor=color,
+                                 alpha=alpha,
+                                 label=label)
                     
-                    # Apply pattern
                     if pattern == 'hatched':
                         bar[0].set_hatch('///')
                     elif pattern == 'dotted':
@@ -3456,22 +3499,17 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                         bar[0].set_hatch('xxx')
                 
                 ax.set_xticks(x)
-                ax.set_xticklabels(labels, rotation=45)
+                ax.set_xticklabels(modality_labels, rotation=45)
                 ax.set_ylim(0, 1)
                 ax.set_title('Preview', fontsize=8)
-                
-                # Remove spines and ticks for cleaner look
                 ax.spines['top'].set_visible(False)
                 ax.spines['right'].set_visible(False)
                 
                 preview_figure.tight_layout()
                 preview_canvas.draw()
             
-            # Connect preview updates to changes in pattern and alpha
             pattern_selector.currentIndexChanged.connect(update_preview)
             alpha_slider.valueChanged.connect(update_preview)
-            
-            # Initial preview
             update_preview()
             
             # Dialog buttons
@@ -3494,13 +3532,12 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 
                 try:
                     data = pd.read_csv(file_path)
-                    color = plt.cm.tab20(len(self.datasets) % 20)
+                    # Use the selected color from the colorwheel
+                    color = dataset_color_dict["color"]
                     
-                    # Get selected pattern and alpha
                     pattern = pattern_selector.currentData()
                     alpha = alpha_slider.value() / 100.0
                     
-                    # Store both original and working copy of data with appearance properties
                     self.datasets[name] = {
                         "data": data.copy(),
                         "original_data": data.copy(),
@@ -3513,11 +3550,9 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     self.dataset_colors[name] = color
                     self.dataset_patterns[name] = pattern
                     
-                    # Initialize empty exclusion lists for this dataset
                     self.excluded_participants[name] = []
                     self.excluded_trials[name] = []
                     
-                    # Update participant selector
                     self.update_participant_selector()
                     self.statusBar().showMessage(f'Loaded dataset: {name}')
                     
