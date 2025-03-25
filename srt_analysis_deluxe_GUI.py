@@ -334,16 +334,23 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # MDS Controls
         mds_group = QGroupBox("Multidimensional Scaling (MDS)")
         mds_layout = QVBoxLayout(mds_group)
-        mds_options = QHBoxLayout()
+        mds_top_row = QHBoxLayout()
         self.mds_color_feature = QComboBox(self)
         self.mds_color_feature.addItems(['Dataset', 'Age', 'Custom Column...'])
         self.mds_color_feature.currentTextChanged.connect(self.handle_custom_mds_feature)
         self.plot_mds_button = QPushButton('MDS Plot', self)
         self.plot_mds_button.clicked.connect(self.plot_mds)
-        mds_options.addWidget(QLabel("Color by:"))
-        mds_options.addWidget(self.mds_color_feature)
-        mds_options.addWidget(self.plot_mds_button)
-        mds_layout.addLayout(mds_options)
+        mds_top_row.addWidget(QLabel("Color by:"))
+        mds_top_row.addWidget(self.mds_color_feature)
+        mds_top_row.addWidget(self.plot_mds_button)
+        self.plot_rdm_button = QPushButton('RDM Plot', self)
+        self.plot_rdm_button.clicked.connect(self.plot_rdms)
+        mds_top_row.addWidget(self.plot_rdm_button)
+        self.rdm_metric_combo = QComboBox(self)
+        self.rdm_metric_combo.addItems(["Euclidean", "Manhattan", "Chebyshev", "Cosine"])
+        mds_top_row.addWidget(QLabel("Distance:"))
+        mds_top_row.addWidget(self.rdm_metric_combo)
+        mds_layout.addLayout(mds_top_row)
         
         # Add the mds_age_slider for age filtering (initially hidden)
         self.mds_age_slider = RangeSlider(self)
@@ -352,10 +359,18 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.mds_age_slider.setEnd(100)
         mds_layout.addWidget(self.mds_age_slider)
         self.mds_age_slider.setVisible(False)
+
+        self.combine_rdm_checkbox = QCheckBox("Combine Datasets")
         
+        # Combine datasets checkbox moved alongside the descriptive label
+        combine_layout = QHBoxLayout()
         mds_desc = QLabel("Visualizes participants in 2D space based on reaction time patterns")
         mds_desc.setWordWrap(True)
-        mds_layout.addWidget(mds_desc)
+        combine_layout.addWidget(mds_desc)
+        combine_layout.addStretch()
+        combine_layout.addWidget(self.combine_rdm_checkbox)  # reuse existing checkbox
+        mds_layout.addLayout(combine_layout)
+        
         analysis_layout.addWidget(mds_group)
     
         analysis_layout.addStretch()
@@ -390,6 +405,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         main_layout.addWidget(right_widget, 1)
         self.show()
+
     def create_model_parameter_widgets(self):
         # Coactivation Model parameters
         self.coactivation_widget = QWidget(self)
@@ -1229,6 +1245,222 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
         self.canvas.draw()
     
+    def plot_rdms(self):
+        selected_items = self.dataset_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select at least one dataset.")
+            return
+    
+        # Prompt user to select features (like in the MDS plot)
+        rdm_features = self.prompt_mds_features()
+        if not rdm_features:
+            return
+        if len(rdm_features) == 1:
+            rdm_features = rdm_features * 2
+    
+        metric_label = self.rdm_metric_combo.currentText()
+        metric_map = {
+            "Euclidean": "euclidean",
+            "Manhattan": "cityblock",
+            "Chebyshev": "chebyshev",
+            "Cosine": "cosine"
+        }
+        selected_metric = metric_map.get(metric_label, "euclidean")
+    
+        self.current_figure_type = "rdms"   # Set figure type so that saving uses "rdms"
+        if self.combine_rdm_checkbox.isChecked():
+            combined_data = pd.DataFrame()
+            for item in selected_items:
+                dataset_name = item.text()
+                data = self.get_filtered_data(dataset_name)
+                if data is not None:
+                    combined_data = pd.concat([combined_data, data], ignore_index=True)
+    
+            valid_data = []
+            all_participants = combined_data['participant_number'].unique()
+            for participant in all_participants:
+                part_data = combined_data[combined_data['participant_number'] == participant]
+                feats = []
+                for feat in rdm_features:
+                    value = self.get_factor_value(part_data, feat, (0, 100))
+                    try:
+                        f_val = float(value)
+                    except (ValueError, TypeError):
+                        f_val = np.nan
+                    feats.append(f_val)
+                if len(feats) == 1:
+                    feats = feats * 2
+                age = self.get_factor_value(part_data, "Age", (0, 100))
+                try:
+                    age_val = float(age)
+                except (ValueError, TypeError):
+                    age_val = np.nan
+                if any(np.isnan(feats)) or np.isnan(age_val):
+                    continue
+                if self.mds_age_slider.isVisible():
+                    lo_age = self.mds_age_slider.first_position
+                    hi_age = self.mds_age_slider.second_position
+                    if not (lo_age <= age_val <= hi_age):
+                        continue
+                valid_data.append((participant, feats, age_val))
+    
+            if len(valid_data) < 2:
+                QMessageBox.warning(self, "Insufficient Data", "Not enough valid numeric values to compute combined RDM.")
+                return
+    
+            valid_data = sorted(valid_data, key=lambda x: x[2])
+            valid_ids = [t[0] for t in valid_data]
+            feature_values = [t[1] for t in valid_data]
+            age_values = [t[2] for t in valid_data]
+    
+            from scipy.spatial.distance import pdist, squareform
+            combined_feature_array = np.array(feature_values)
+            feature_rdm = squareform(pdist(combined_feature_array, metric=selected_metric))
+    
+            age_array = np.array(age_values).reshape(-1, 1)
+            age_rdm = squareform(pdist(age_array, metric="euclidean"))
+    
+            iu = np.triu_indices_from(feature_rdm, k=1)
+            feature_flat = feature_rdm[iu]
+            age_flat = age_rdm[iu]
+            from scipy.stats import spearmanr
+            corr, p_value = spearmanr(feature_flat, age_flat)
+    
+            self.figure.clear()
+            ax1 = self.figure.add_subplot(121)
+            im1 = ax1.imshow(feature_rdm, cmap='viridis', interpolation='nearest')
+            ax1.set_title("Feature RDM", fontsize=10)
+            ax1.set_xlabel("Participant")
+            ax1.set_ylabel("Participant")
+            if len(valid_ids) <= 10:
+                ax1.set_xticks(range(len(valid_ids)))
+                ax1.set_xticklabels(valid_ids, rotation=45, fontsize=8)
+                ax1.set_yticks(range(len(valid_ids)))
+                ax1.set_yticklabels(valid_ids, fontsize=8)
+            else:
+                ax1.set_xticks([])
+                ax1.set_yticks([])
+            self.figure.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+    
+            ax2 = self.figure.add_subplot(122)
+            im2 = ax2.imshow(age_rdm, cmap='viridis', interpolation='nearest')
+            ax2.set_title("Age RDM", fontsize=10)
+            ax2.set_xlabel("Participant")
+            ax2.set_ylabel("Participant")
+            if len(valid_ids) <= 10:
+                ax2.set_xticks(range(len(valid_ids)))
+                ax2.set_xticklabels(valid_ids, rotation=45, fontsize=8)
+                ax2.set_yticks(range(len(valid_ids)))
+                ax2.set_yticklabels(valid_ids, fontsize=8)
+            else:
+                ax2.set_xticks([])
+                ax2.set_yticks([])
+            self.figure.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    
+            self.figure.tight_layout()
+    
+            explanation = (
+                "Combined RDMs computed:\n"
+                "Left: Feature RDM\n"
+                "Right: Age RDM\n"
+                f"Spearman correlation between RDMs: r = {corr:.3f}, p = {p_value:.3f}\n"
+                f"Distance Metric: {metric_label}"
+            )
+            self.explanation_label.setText(explanation)
+            self.canvas.draw()
+    
+            # Store the computed RDM data along with participant ages
+            figure_data = {
+                "participant_ids": valid_ids,
+                "feature_rdm": feature_rdm.tolist(),
+                "age_rdm": age_rdm.tolist(),
+                "age_values": age_values,
+                "selected_metric": metric_label
+            }
+            self.store_figure_data("rdms", figure_data)
+        else:
+            # --- Individual-dataset behavior (unchanged) ---
+            self.figure.clear()
+            n_datasets = len(selected_items)
+            n_cols = int(np.ceil(np.sqrt(n_datasets)))
+            n_rows = int(np.ceil(n_datasets / n_cols))
+            self.figure.set_size_inches(4 * n_cols, 3 * n_rows)
+            axs = self.figure.subplots(n_rows, n_cols)
+            if n_datasets == 1:
+                axs = [axs]
+            else:
+                axs = np.atleast_1d(axs).flatten()
+    
+            explanation = f"RDMs computed for features\nDistance Metric: {metric_label}\n\n"
+    
+            from scipy.spatial.distance import pdist, squareform
+    
+            for idx, item in enumerate(selected_items):
+                dataset_name = item.text()
+                data = self.get_filtered_data(dataset_name)
+                if data is None:
+                    continue
+    
+                participants = sorted(data['participant_number'].unique())
+                feature_values = []
+                valid_ids = []
+                for participant in participants:
+                    part_data = data[data['participant_number'] == participant]
+                    feats = []
+                    for feat in rdm_features:
+                        value = self.get_factor_value(part_data, feat, (0, 100))
+                        try:
+                            f_val = float(value)
+                        except (ValueError, TypeError):
+                            f_val = np.nan
+                        feats.append(f_val)
+                    if len(feats) == 1:
+                        feats = feats * 2
+                    age = self.get_factor_value(part_data, "Age", (0, 100))
+                    try:
+                        age_val = float(age)
+                    except (ValueError, TypeError):
+                        age_val = np.nan
+                    if np.isnan(age_val) or any(np.isnan(feats)):
+                        continue
+                    if self.mds_age_slider.isVisible():
+                        lo_age = self.mds_age_slider.first_position
+                        hi_age = self.mds_age_slider.second_position
+                        if not (lo_age <= age_val <= hi_age):
+                            continue
+                    feature_values.append(feats)
+                    valid_ids.append(participant)
+    
+                if len(feature_values) < 2:
+                    explanation += f"{dataset_name}: Not enough numeric values.\n\n"
+                    continue
+    
+                feature_array = np.array(feature_values)
+                rdm = squareform(pdist(feature_array, metric=selected_metric))
+    
+                ax = axs[idx]
+                im = ax.imshow(rdm, cmap='viridis', interpolation='nearest')
+                ax.set_title(f"{dataset_name}\n(RDM)", fontsize=10)
+                ax.set_xlabel("Participant")
+                ax.set_ylabel("Participant")
+                if len(valid_ids) <= 10:
+                    ax.set_xticks(range(len(valid_ids)))
+                    ax.set_xticklabels(valid_ids, rotation=45, fontsize=8)
+                    ax.set_yticks(range(len(valid_ids)))
+                    ax.set_yticklabels(valid_ids, fontsize=8)
+                else:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+    
+                self.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    
+                explanation += f"{dataset_name}: RDM plotted using {metric_label} distance.\n"
+                explanation += "Target Age RDM not computed in individual mode.\n\n"
+    
+            self.explanation_label.setText(explanation)
+            self.figure.tight_layout()
+            self.canvas.draw()
+
     def handle_custom_mds_feature(self, text):
         if text == "Age":
             # Ensure the slider is large enough and visible
@@ -3011,15 +3243,16 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
         if not file_path:
             return
-            
+    
         try:
             data = self.figure_data[self.current_figure_type]
-            
-            if file_path.lower().endswith('.json'):
+    
+            # If the data does not include a "datasets" key or the file extension is JSON, save as JSON.
+            if (not isinstance(data, dict)) or ('datasets' not in data) or file_path.lower().endswith('.json'):
                 with open(file_path, 'w') as f:
                     json.dump(data, f, indent=4)
             else:
-                # Convert nested dict to DataFrame
+                # Convert nested dict into a CSV-friendly format
                 rows = []
                 for dataset, values in data['datasets'].items():
                     for key, value in values.items():
@@ -3031,15 +3264,21 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                                     'Index': i,
                                     'Value': v
                                 })
-                
+                        else:
+                            rows.append({
+                                'Dataset': dataset,
+                                'Measure': key,
+                                'Index': '',
+                                'Value': value
+                            })
                 df = pd.DataFrame(rows)
                 df.to_csv(file_path, index=False)
-                
+    
             self.statusBar().showMessage(f'Figure data saved to {file_path}', 5000)
-            
+    
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save figure data: {str(e)}")
-
+            
     def show_more_info(self):
         info_text = """
         <h2>Race Model Types</h2>
