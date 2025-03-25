@@ -3247,34 +3247,67 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         try:
             data = self.figure_data[self.current_figure_type]
     
-            # If the data does not include a "datasets" key or the file extension is JSON, save as JSON.
-            if (not isinstance(data, dict)) or ('datasets' not in data) or file_path.lower().endswith('.json'):
-                with open(file_path, 'w') as f:
-                    json.dump(data, f, indent=4)
+            # Special handling for RDM: save three CSV files if not saving JSON
+            if self.current_figure_type == "rdms" and isinstance(data, dict):
+                if file_path.lower().endswith('.json'):
+                    with open(file_path, 'w') as f:
+                        json.dump(data, f, indent=4)
+                    self.statusBar().showMessage(f'Figure data saved as JSON to {file_path}', 5000)
+                else:
+                    # Derive a base name and add suffixes for each file
+                    base, _ = os.path.splitext(file_path)
+                    feature_csv = base + "_feature_rdm.csv"
+                    target_csv = base + "_target_rdm.csv"
+                    labels_csv = base + "_target_labels.csv"
+    
+                    # Expect data with keys: "participant_ids", "feature_rdm", "age_rdm", "age_values", "selected_metric"
+                    df_feature = pd.DataFrame(data["feature_rdm"],
+                                              index=data["participant_ids"],
+                                              columns=data["participant_ids"])
+                    df_feature.to_csv(feature_csv, index=True)
+    
+                    df_target = pd.DataFrame(data["age_rdm"],
+                                             index=data["participant_ids"],
+                                             columns=data["participant_ids"])
+                    df_target.to_csv(target_csv, index=True)
+    
+                    df_labels = pd.DataFrame({
+                        "participant_id": data["participant_ids"],
+                        "target_label": data["age_values"]
+                    })
+                    df_labels.to_csv(labels_csv, index=False)
+    
+                    self.statusBar().showMessage(
+                        f'RDM data saved to:\nFeature RDM: {feature_csv}\nTarget RDM: {target_csv}\nLabels: {labels_csv}', 5000)
             else:
-                # Convert nested dict into a CSV-friendly format
-                rows = []
-                for dataset, values in data['datasets'].items():
-                    for key, value in values.items():
-                        if isinstance(value, (list, np.ndarray)):
-                            for i, v in enumerate(value):
+                # Default behavior: save as JSON if not a nested "datasets" structure
+                if (not isinstance(data, dict)) or ('datasets' not in data) or file_path.lower().endswith('.json'):
+                    with open(file_path, 'w') as f:
+                        json.dump(data, f, indent=4)
+                else:
+                    # Convert nested dict into a CSV-friendly format
+                    rows = []
+                    for dataset, values in data['datasets'].items():
+                        for key, value in values.items():
+                            if isinstance(value, (list, np.ndarray)):
+                                for i, v in enumerate(value):
+                                    rows.append({
+                                        'Dataset': dataset,
+                                        'Measure': key,
+                                        'Index': i,
+                                        'Value': v
+                                    })
+                            else:
                                 rows.append({
                                     'Dataset': dataset,
                                     'Measure': key,
-                                    'Index': i,
-                                    'Value': v
+                                    'Index': '',
+                                    'Value': value
                                 })
-                        else:
-                            rows.append({
-                                'Dataset': dataset,
-                                'Measure': key,
-                                'Index': '',
-                                'Value': value
-                            })
-                df = pd.DataFrame(rows)
-                df.to_csv(file_path, index=False)
+                    df = pd.DataFrame(rows)
+                    df.to_csv(file_path, index=False)
     
-            self.statusBar().showMessage(f'Figure data saved to {file_path}', 5000)
+                self.statusBar().showMessage(f'Figure data saved to {file_path}', 5000)
     
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save figure data: {str(e)}")
@@ -3844,19 +3877,19 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         selected_items = self.dataset_list.selectedItems()
         if len(selected_items) < 2:
             QMessageBox.warning(self, "Selection Error", 
-                              "Please select at least two datasets to combine.")
+                                  "Please select at least two datasets to combine.")
             return
     
         # Get name for combined dataset
         name, ok = QInputDialog.getText(self, 'Combined Dataset Name', 
-                                      'Enter a name for the combined dataset:',
-                                      text='Combined_Dataset')
+                                        'Enter a name for the combined dataset:',
+                                        text='Combined_Dataset')
         if not ok or not name:
             return
-        
+    
         if name in self.datasets:
             QMessageBox.warning(self, "Name Exists", 
-                              "A dataset with this name already exists.")
+                                  "A dataset with this name already exists.")
             return
     
         try:
@@ -3869,34 +3902,46 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 data['source_dataset'] = dataset_name
                 combined_data = pd.concat([combined_data, data], ignore_index=True)
     
-            # Store the combined dataset
+            # Prompt a file dialog so the user can save the combined dataset as CSV
+            options = QFileDialog.Options()
+            save_path, _ = QFileDialog.getSaveFileName(self, "Save Combined Dataset", "",
+                                                       "CSV Files (*.csv);;All Files (*)", options=options)
+            if save_path:
+                if not save_path.lower().endswith('.csv'):
+                    save_path += '.csv'
+                combined_data.to_csv(save_path, index=False)
+                self.statusBar().showMessage(f"Combined dataset saved to {save_path}", 5000)
+            else:
+                # If the user cancels the save, exit the combine_datasets() method
+                return
+    
+            # Store the combined dataset in internal state
             color = plt.cm.tab20(len(self.datasets) % 20)
             pattern = 'solid'  # You can adjust the pattern as needed
-            
+    
             self.datasets[name] = {
                 "data": combined_data.copy(),
                 "original_data": combined_data.copy(),
                 "color": color,
                 "pattern": pattern
             }
-            
+    
             # Add to list and initialize exclusions
             self.dataset_list.addItem(name)
             self.dataset_colors[name] = color
             self.dataset_patterns[name] = pattern
             self.excluded_participants[name] = []
             self.excluded_trials[name] = []
-            
+    
             # Update participant selector
             self.update_participant_selector()
-            
+    
             QMessageBox.information(self, "Success", 
-                                  f"Successfully combined {len(selected_items)} datasets into '{name}'")
-            self.statusBar().showMessage(f'Created combined dataset: {name}')
+                                      f"Successfully combined {len(selected_items)} datasets into '{name}' and saved to file.")
+            self.statusBar().showMessage(f'Created combined dataset: {name}', 5000)
     
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to combine datasets: {str(e)}")
-
     def open_csv_for_formatting(self):
         options = QFileDialog.Options()
         # Allow both CSV and Excel files
