@@ -23,6 +23,8 @@ import matplotlib.cm as cm
 import sys
 import os
 import json
+from sklearn.preprocessing import MinMaxScaler
+
 sys.setrecursionlimit(5000)
 class RangeSlider(QWidget):
     valueChanged = pyqtSignal(int, int)
@@ -253,7 +255,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
         # Race Model selector & parameter widgets
         self.model_selector = QComboBox(self)
-        self.model_selector.addItems(["Standard Race Model", "Coactivation Model",
+        self.model_selector.addItems(["Standard Race Model", "Miller Standard Race Model", "Coactivation Model",
                                       "Parallel Interactive Race Model",
                                       "Multisensory Response Enhancement Model",
                                       "Permutation Test"])
@@ -1216,8 +1218,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             QMessageBox.warning(self, "Insufficient Data", "Not enough valid participant data for MDS.")
             return
     
+        all_participant_data = np.array(all_participant_data)
+        scaler = MinMaxScaler()
+        features_norm = scaler.fit_transform(all_participant_data)
         mds_model = MDS(n_components=2, random_state=42)
-        embedding = mds_model.fit_transform(np.array(all_participant_data))
+        embedding = mds_model.fit_transform(features_norm)
     
         if self.mds_color_feature.currentText() == "Dataset":
             colors_for_points = [self.datasets[ds]["color"] if ds in self.datasets else 'black'
@@ -1270,14 +1275,27 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.current_figure_type = "rdms"   # Set figure type so that saving uses "rdms"
         if self.combine_rdm_checkbox.isChecked():
             combined_data = pd.DataFrame()
+            dataset_sources = {}  # Track which original dataset each participant belongs to
+            
             for item in selected_items:
                 dataset_name = item.text()
                 data = self.get_filtered_data(dataset_name)
                 if data is not None:
+                    # Track the source dataset for each participant
+                    for participant in data['participant_number'].unique():
+                        dataset_sources[participant] = dataset_name
+                    
+                    # Add source_dataset column if it doesn't already exist
+                    if 'source_dataset' not in data.columns:
+                        data = data.copy()
+                        data['source_dataset'] = dataset_name
+                    
                     combined_data = pd.concat([combined_data, data], ignore_index=True)
     
             valid_data = []
             all_participants = combined_data['participant_number'].unique()
+            color_feature = self.mds_color_feature.currentText()
+            
             for participant in all_participants:
                 part_data = combined_data[combined_data['participant_number'] == participant]
                 feats = []
@@ -1290,41 +1308,109 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     feats.append(f_val)
                 if len(feats) == 1:
                     feats = feats * 2
-                age = self.get_factor_value(part_data, "Age", (0, 100))
-                try:
-                    age_val = float(age)
-                except (ValueError, TypeError):
-                    age_val = np.nan
-                if any(np.isnan(feats)) or np.isnan(age_val):
+                
+                # Handle color feature values based on type
+                if color_feature == "Dataset":
+                    # Get the source dataset directly
+                    if 'source_dataset' in part_data.columns:
+                        color_val = part_data['source_dataset'].iloc[0]  # Use the source_dataset column
+                    else:
+                        color_val = dataset_sources.get(participant, "Unknown")  # Use our tracking dict as backup
+                else:
+                    # For age or custom columns
+                    color_val = self.get_factor_value(part_data, color_feature, (0, 100))
+                    
+                    # Only check for age filtering if age is selected and visible
+                    if color_feature == "Age" and self.mds_age_slider.isVisible():
+                        try:
+                            age_val = float(color_val)
+                            lo_age = self.mds_age_slider.first_position
+                            hi_age = self.mds_age_slider.second_position
+                            if not (lo_age <= age_val <= hi_age):
+                                continue
+                        except (ValueError, TypeError):
+                            # Skip if age value isn't valid and we need age filtering
+                            continue
+                
+                if any(np.isnan(feats)):
                     continue
-                if self.mds_age_slider.isVisible():
-                    lo_age = self.mds_age_slider.first_position
-                    hi_age = self.mds_age_slider.second_position
-                    if not (lo_age <= age_val <= hi_age):
-                        continue
-                valid_data.append((participant, feats, age_val))
+                    
+                # Store participant ID, features, and color value
+                valid_data.append((participant, feats, color_val))
     
             if len(valid_data) < 2:
                 QMessageBox.warning(self, "Insufficient Data", "Not enough valid numeric values to compute combined RDM.")
                 return
     
-            valid_data = sorted(valid_data, key=lambda x: x[2])
+            # For "Dataset" feature, sort by dataset name
+            if color_feature == "Dataset":
+                valid_data = sorted(valid_data, key=lambda x: str(x[2]))
+            # Sort by the color value if it's numeric, otherwise just use as-is
+            elif color_feature == "Age" or all(isinstance(item[2], (int, float)) for item in valid_data if item[2] is not None):
+                # Try to sort numerically when values are numbers (like age)
+                try:
+                    valid_data = sorted(valid_data, key=lambda x: float(x[2]) if x[2] is not None else float('inf'))
+                except (ValueError, TypeError):
+                    # If sorting fails, leave as-is
+                    pass
+            
             valid_ids = [t[0] for t in valid_data]
             feature_values = [t[1] for t in valid_data]
-            age_values = [t[2] for t in valid_data]
+            color_values = [t[2] for t in valid_data]
     
-            from scipy.spatial.distance import pdist, squareform
             combined_feature_array = np.array(feature_values)
-            feature_rdm = squareform(pdist(combined_feature_array, metric=selected_metric))
+            scaler = MinMaxScaler()
+            combined_feature_array_norm = scaler.fit_transform(combined_feature_array)
+            from scipy.spatial.distance import pdist, squareform
+            feature_rdm = squareform(pdist(combined_feature_array_norm, metric=selected_metric))
     
-            age_array = np.array(age_values).reshape(-1, 1)
-            age_rdm = squareform(pdist(age_array, metric="euclidean"))
-    
+            # Create target RDM based on color feature values
+            if color_feature == "Dataset":
+                # Map dataset names to integers for RDM calculation
+                unique_datasets = sorted(list(set(color_values)))
+                dataset_map = {ds: i for i, ds in enumerate(unique_datasets)}
+                numeric_values = np.array([dataset_map[val] for val in color_values]).reshape(-1, 1)
+                target_rdm = squareform(pdist(numeric_values, metric="euclidean"))
+                # For correlation calculation
+                numeric_color_values = [dataset_map[val] for val in color_values]
+            else:
+                # For other features, try to create numeric values
+                numeric_color_values = []
+                for val in color_values:
+                    try:
+                        numeric_color_values.append(float(val))
+                    except (ValueError, TypeError):
+                        # For non-numeric values, we need to create a mapping
+                        numeric_color_values.append(np.nan)
+                
+                # If we have non-numeric values, create a mapping
+                if any(np.isnan(numeric_color_values)):
+                    unique_values = sorted(list(set(str(val) for val in color_values)))
+                    value_map = {val: i for i, val in enumerate(unique_values)}
+                    numeric_color_values = [value_map[str(val)] for val in color_values]
+                
+                numeric_array = np.array(numeric_color_values).reshape(-1, 1)
+                target_rdm = squareform(pdist(numeric_array, metric="euclidean"))
+                
+                # If we have non-numeric values, create a mapping
+                if any(np.isnan(numeric_color_values)):
+                    unique_values = sorted(list(set(str(val) for val in color_values)))
+                    value_map = {val: i for i, val in enumerate(unique_values)}
+                    numeric_color_values = [value_map[str(val)] for val in color_values]
+                
+                numeric_array = np.array(numeric_color_values).reshape(-1, 1)
+                target_rdm = squareform(pdist(numeric_array, metric="euclidean"))
+                
+            # Calculate correlation between feature RDM and target RDM
             iu = np.triu_indices_from(feature_rdm, k=1)
             feature_flat = feature_rdm[iu]
-            age_flat = age_rdm[iu]
+            target_flat = target_rdm[iu]
             from scipy.stats import spearmanr
-            corr, p_value = spearmanr(feature_flat, age_flat)
+            valid_indices = ~np.isnan(target_flat) & ~np.isnan(feature_flat)
+            if np.any(valid_indices):
+                corr, p_value = spearmanr(feature_flat[valid_indices], target_flat[valid_indices])
+            else:
+                corr, p_value = np.nan, np.nan
     
             self.figure.clear()
             ax1 = self.figure.add_subplot(121)
@@ -1343,8 +1429,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             self.figure.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
     
             ax2 = self.figure.add_subplot(122)
-            im2 = ax2.imshow(age_rdm, cmap='viridis', interpolation='nearest')
-            ax2.set_title("Age RDM", fontsize=10)
+            im2 = ax2.imshow(target_rdm, cmap='viridis', interpolation='nearest')
+            ax2.set_title(f"{color_feature} RDM", fontsize=10)
             ax2.set_xlabel("Participant")
             ax2.set_ylabel("Participant")
             if len(valid_ids) <= 10:
@@ -1356,28 +1442,42 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 ax2.set_xticks([])
                 ax2.set_yticks([])
             self.figure.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-    
+            if not (np.isnan(corr) or np.isnan(p_value)):
+                correlation_text = f"Spearman correlation: r = {corr:.3f}, p = {p_value:.3f}"
+                # Place text at the bottom of the figure
+                self.figure.text(0.5, 0.01, correlation_text, 
+                                ha='center', va='bottom', 
+                                fontsize=10, fontweight='bold',
+                                bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray', boxstyle='round'))
             self.figure.tight_layout()
     
+            # Create explanation text based on what data we have
+            if np.isnan(corr) or np.isnan(p_value):
+                correlation_text = "Correlation between RDMs could not be calculated (non-numeric or insufficient data)"
+            else:
+                correlation_text = f"Spearman correlation between RDMs: r = {corr:.3f}, p = {p_value:.3f}"
+            
             explanation = (
                 "Combined RDMs computed:\n"
                 "Left: Feature RDM\n"
-                "Right: Age RDM\n"
-                f"Spearman correlation between RDMs: r = {corr:.3f}, p = {p_value:.3f}\n"
+                f"Right: {color_feature} RDM\n"
+                f"{correlation_text}\n"
                 f"Distance Metric: {metric_label}"
             )
             self.explanation_label.setText(explanation)
             self.canvas.draw()
     
-            # Store the computed RDM data along with participant ages
+            # Store the computed RDM data along with color values
             figure_data = {
                 "participant_ids": valid_ids,
                 "feature_rdm": feature_rdm.tolist(),
-                "age_rdm": age_rdm.tolist(),
-                "age_values": age_values,
+                "target_rdm": target_rdm.tolist(),
+                "color_values": color_values,
+                "color_feature": color_feature,
                 "selected_metric": metric_label
             }
             self.store_figure_data("rdms", figure_data)
+        
         else:
             # --- Individual-dataset behavior (unchanged) ---
             self.figure.clear()
@@ -2351,9 +2451,10 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
             return
-    
+        
         self.figure.clear()
         self.figure.set_size_inches(8, 5)  # Base canvas size
+        self.current_figure_type = 'race_model'
         
         # Calculate grid dimensions
         n_datasets = len(selected_items)
@@ -2373,7 +2474,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         total_height = min(max_height, n_rows * height_per_plot)
         
         self.figure.set_size_inches(total_width, total_height)
-    
+        
         # Adjust subplot spacing based on number of plots
         self.figure.subplots_adjust(
             left=0.1,
@@ -2400,16 +2501,23 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             percentile_range = (self.percentile_range_slider.first_position,
                               self.percentile_range_slider.second_position)
             
-            violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = \
-                self.calculate_race_violation(data, percentile_range)
-    
+            # Add this check to prevent the error
+            result = self.calculate_race_violation(data, percentile_range)
+            if result is None:
+                # Skip this dataset if we cannot compute race violation
+                ax.text(0.5, 0.5, f"Cannot calculate race model for\n{name}\n\nPossible issues:\n- Missing modality data\n- Insufficient trials\n- No variability in RTs",
+                       ha='center', va='center', fontsize=9)
+                continue
+                
+            violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
+        
             # Plot CDFs
             ax.plot(common_rts, ecdf_a, label='Audio', color='red', linewidth=1.5)
             ax.plot(common_rts, ecdf_v, label='Visual', color='blue', linewidth=1.5)
             ax.plot(common_rts, ecdf_av, label='AV', color='purple', linewidth=1.5)  # Shortened label
             ax.plot(common_rts, race_model, label='Race', color='black', 
                     linestyle='--', linewidth=1)  # Shortened label
-    
+        
             # Shade violations
             violations = ecdf_av > race_model
             lower_idx = np.searchsorted(ecdf_av, percentile_range[0] / 100)
@@ -2419,7 +2527,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                            ecdf_av[lower_idx:upper_idx],
                            where=violations[lower_idx:upper_idx],
                            color='red', alpha=0.2)  # Reduced alpha
-    
+        
             # Smaller title with single line
             ax.set_title(name, pad=5, fontsize=9)
             
@@ -2451,11 +2559,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 'max': violation_max,
                 'percent': violation_percent
             })
-    
+        
         # Hide unused subplots
         for idx in range(len(selected_items), len(axs)):
             axs[idx].set_visible(False)
-    
+        
         # Format statistics text
         stats_text = "Race Model Violation Statistics:\n\n"
         column_format = "{:<12}| Area:{:.3f} | Max:{:.3f} | Viol:{:.1f}%"
@@ -2482,15 +2590,16 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             name = item.text()
             data = self.get_filtered_data(name)
             if data is not None:
-                violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = \
-                    self.calculate_race_violation(data, percentile_range)
-                figure_data['datasets'][name] = {
-                    'common_rts': common_rts.tolist(),
-                    'ecdf_audio': ecdf_a.tolist(),
-                    'ecdf_visual': ecdf_v.tolist(),
-                    'ecdf_av': ecdf_av.tolist(),
-                    'race_model': race_model.tolist()
-                }
+                result = self.calculate_race_violation(data, percentile_range)
+                if result is not None:
+                    violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
+                    figure_data['datasets'][name] = {
+                        'common_rts': common_rts.tolist(),
+                        'ecdf_audio': ecdf_a.tolist(),
+                        'ecdf_visual': ecdf_v.tolist(),
+                        'ecdf_av': ecdf_av.tolist(),
+                        'race_model': race_model.tolist()
+                    }
         self.store_figure_data('race_model', figure_data)
         self.explanation_label.setText(stats_text)
         self.figure.tight_layout()
@@ -2778,6 +2887,10 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         selected_model = self.model_selector.currentText()
         
         if selected_model == "Standard Race Model":
+            # Standard independent race model
+            race_model = 1 - (1 - ecdf_a) * (1 - ecdf_v)
+        
+        elif selected_model == "Miller Standard Race Model":
             # Standard independent race model following Miller's inequality
             # P(RT ≤ t)bimodal = min[P(RT ≤ t)modality1 + P(RT ≤ t)modality2, 1]
             race_model = np.minimum(ecdf_a + ecdf_v, 1.0)
@@ -2875,6 +2988,10 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 
                 # Calculate race model for permuted data using the same model as selected
                 if selected_model == "Standard Race Model":
+                    # Apply the correct Standard Race Model formula (Raab's model)
+                    perm_race_model = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
+                elif selected_model == "Miller Standard Race Model":
+                    # Apply Miller's race model inequality
                     perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)
                 elif selected_model == "Coactivation Model":
                     mean_c = self.coactivation_mean_slider.value()
@@ -2891,7 +3008,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     lambda_param = self.mre_lambda_slider.value() / 100
                     perm_race_model = alpha * perm_ecdf_a + beta * perm_ecdf_v + lambda_param * (perm_ecdf_a * perm_ecdf_v)
                 else:
-                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)  # Default to standard
+                    # Default to Miller's inequality as a reasonable fallback
+                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)
                 
                 perm_race_model = np.clip(perm_race_model, 0, 1)
                 
@@ -3222,13 +3340,59 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
     def save_figure(self):
         options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Figure", "", "PNG Files (*.png);;EPS Files (*.eps);;SVG Files (*.svg);;All Files (*)", options=options)
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Figure", "", 
+            "SVG Files (*.svg);;PDF Files (*.pdf);;EPS Files (*.eps);;PNG Files (*.png);;All Files (*)", 
+            options=options
+        )
+        
         if file_path:
-            if not (file_path.lower().endswith('.png') or file_path.lower().endswith('.eps') or file_path.lower().endswith('.svg')):
-                file_path += '.png'  # Default to PNG if no extension is provided
-            self.figure.savefig(file_path)
-            self.statusBar().showMessage('Figure saved successfully!', 5000)
-
+            # Determine file format based on extension
+            ext = os.path.splitext(file_path)[1].lower()
+            if not ext:
+                ext = '.png'  # Default to PNG if no extension
+                file_path += ext
+            
+            # Common parameters for all formats
+            common_params = {
+                'bbox_inches': 'tight',
+                'dpi': 300,
+            }
+            
+            # Format-specific parameters
+            if ext == '.svg':
+                params = {
+                    'format': 'svg',
+                    'transparent': True,
+                    'metadata': {'Creator': 'CART-GUI'}
+                }
+            elif ext in ['.eps', '.pdf']:
+                params = {
+                    'format': ext[1:],
+                    'transparent': True,
+                    'metadata': {'Creator': 'CART-GUI'},
+                    # Removed 'rasterized': False to avoid PS backend error
+                    'edgecolor': 'none'
+                }
+            else:  # For PNG or other raster formats
+                params = {}
+            
+            try:
+                self.figure.savefig(file_path, **common_params, **params)
+                if ext == '.svg':
+                    self.statusBar().showMessage(
+                        'SVG figure saved. Open with Illustrator, Inkscape or similar to edit elements.', 
+                        8000
+                    )
+                elif ext in ['.eps', '.pdf']:
+                    self.statusBar().showMessage(
+                        f'Vector figure saved as {ext[1:].upper()}. Open with Illustrator or similar to edit elements.', 
+                        8000
+                    )
+                else:
+                    self.statusBar().showMessage(f'Figure saved as {ext[1:].upper()}.', 5000)
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", str(e))
     def save_figure_data(self):
         if not self.current_figure_type or self.current_figure_type not in self.figure_data:
             QMessageBox.warning(self, "No Data", "No figure data available to save.")
@@ -3315,13 +3479,19 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     def show_more_info(self):
         info_text = """
         <h2>Race Model Types</h2>
-
-        <h3>1. Standard Race Model (Probability Summation Model)</h3>
-        <p>This model assumes independent and parallel processing of stimuli from different sensory modalities. The reaction time for audiovisual (AV) stimuli is predicted by the probability that either the auditory (A) or visual (V) signal will trigger a response first.</p>
+    
+        <h3>1. Standard Race Model</h3>
+        <p>This model assumes independent and parallel processing of stimuli from different sensory modalities with <strong>probability summation</strong>.</p>
+        <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = 1 - (1 - P(RT ≤ t)<sub>modality 1</sub>)(1 - P(RT ≤ t)<sub>modality 2</sub>)</p>
+        <p>This formulation—derived from Raab (1962)—computes the probability of observing a response by time t as the complement of both individual sensory channels missing the detection. It represents the probability that <strong>either</strong> the auditory OR visual signal will trigger a response first, assuming independence between channels.</p>
+        
+        <h3>2. Miller Standard Race Model</h3>
+        <p>This is the classical inequality formulation emphasized by Miller (1982), which provides a more stringent test for multisensory integration.</p>
         <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = min[P(RT ≤ t)<sub>modality 1</sub> + P(RT ≤ t)<sub>modality 2</sub>, 1]</p>
-        <p>This formulation—originally derived from Raab (1962)—assumes stochastic independence between the "racers" and follows the more stringent inequality emphasized by Miller (1982), wherein the summed CDF (capped at 1) serves as the upper bound. In our GUI, observed reaction times that exceed this bound indicate significant multisensory integration.</p>
-
-        <h3>2. Coactivation Model</h3>
+        <p>This inequality sets an upper bound for the race model. If observed bimodal responses exceed this bound, it suggests co-activation rather than independent processing. The Miller bound is more conservative than Raab's model for detecting violations, particularly at faster response times where both modalities have moderate probabilities.</p>
+        <p>The key difference is that Miller's inequality uses <strong>addition</strong> of individual probabilities (capped at 1), while the standard race model uses <strong>multiplicative probability</strong> to account for independent processing.</p>
+    
+        <h3>3. Coactivation Model</h3>
         <p>In the coactivation framework, inputs from multiple sensory modalities are pooled together to form a combined activation signal that drives the decision process. Rather than assuming that the entire bimodal RT distribution is normal, this model posits that each modality contributes independently to an accumulating decision variable. The response is triggered when this joint activation reaches a threshold.</p>
         <p>If the decision variable is modeled as the sum of the sensory-specific activations:</p>
         <p>X(t) = X<sub>A</sub>(t) + X<sub>V</sub>(t)</p>
@@ -3331,8 +3501,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             <li><strong>Mean (μ<sub>c</sub>):</strong> The average reaction time for the combined AV stimulus. A lower value indicates faster overall processing.</li>
             <li><strong>Standard Deviation (σ<sub>c</sub>):</strong> The variability in reaction times. A lower value suggests more consistent responses.</li>
         </ul>
-
-        <h3>3. Parallel Interactive Race Model</h3>
+    
+        <h3>4. Parallel Interactive Race Model</h3>
         <p>This model accounts for interactions between modalities that enhance the race dynamics. It retains the basic premise of independent processing while incorporating limited inter-channel interactions (crosstalk) that further facilitate responses.</p>
         <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = [1 - (1 - P(RT ≤ t)<sub>modality 1</sub>)(1 - P(RT ≤ t)<sub>modality 2</sub>)] + γ · P(RT ≤ t)<sub>interaction</sub></p>
         <p>where γ represents the magnitude of the interaction effect between the modalities, and P(RT ≤ t)<sub>interaction</sub> captures the additional probability of response arising from inter-channel communication. This model was introduced by Mordkoff and Yantis (1993) and further refined by Townsend and Wenger (2011).</p>
@@ -3340,8 +3510,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         <ul>
             <li><strong>Interaction (γ):</strong> The strength of cross-modal interaction. Higher values indicate stronger facilitation between sensory channels.</li>
         </ul>
-
-        <h3>4. Multisensory Response Enhancement Model</h3>
+    
+        <h3>5. Multisensory Response Enhancement Model</h3>
         <p>This model posits that the combination of sensory inputs results in an enhanced response exceeding the sum of individual inputs.</p>
         <p>Formula: P(RT ≤ t)<sub>bimodal</sub> = α · P(RT ≤ t)<sub>modality 1</sub> + β · P(RT ≤ t)<sub>modality 2</sub> + λ · [P(RT ≤ t)<sub>modality 1</sub> · P(RT ≤ t)<sub>modality 2</sub>]</p>
         <p>where α, β, and λ are parameters representing the individual contributions and interaction effects of the modalities. This formulation, as proposed by Otto et al. (2013) and further developed by Gondan and Minakata (2014), quantifies the multisensory enhancement by incorporating both additive and multiplicative factors.</p>
@@ -3351,46 +3521,46 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             <li><strong>β (Beta):</strong> Weight given to the visual modality. Higher values indicate greater influence of visual stimuli.</li>
             <li><strong>λ (Lambda):</strong> Interaction term that represents the synergistic effect of combining auditory and visual information. Higher values indicate stronger multisensory integration.</li>
         </ul>
-
-        <h3>5. Permutation Test</h3>
+    
+        <h3>6. Permutation Test</h3>
         <p>The permutation test assesses the statistical significance of observed race model violations by randomly reassigning reaction times between conditions. This provides a robust quantitative measure of multisensory integration as described by Colonius and Diederich (2006).</p>
         <p>Parameters:</p>
         <ul>
             <li><strong>Number of permutations:</strong> Higher values provide more accurate p-values but take longer to compute.</li>
             <li><strong>Significance level (α):</strong> The threshold for determining statistical significance.</li>
         </ul>
-
+    
         <p>All of these models allow CART-GUI to plot CDFs and highlight quantitative violations, providing insight into different aspects of multisensory integration. You can adjust each model's parameters to explore various theoretical frameworks and their implications for your data.</p>
         """
-
+    
         # Create a custom dialog
         dialog = QDialog(self)
         dialog.setWindowTitle("Race Model Information")
         dialog.setGeometry(100, 100, 800, 600)  # Larger window size
-
+    
         # Create a layout for the dialog
         layout = QVBoxLayout()
-
+    
         # Create a QTextEdit widget to display the information
         text_edit = QTextEdit()
         text_edit.setReadOnly(True)
         text_edit.setHtml(info_text)  # Set the text as HTML for formatting
-
+    
         # Set a larger, more readable font
         font = QFont("Arial", 11)
         text_edit.setFont(font)
-
+    
         # Add the QTextEdit to the layout
         layout.addWidget(text_edit)
-
+    
         # Create a close button
         close_button = QPushButton("Close")
         close_button.clicked.connect(dialog.close)
         layout.addWidget(close_button)
-
+    
         # Set the layout for the dialog
         dialog.setLayout(layout)
-
+    
         # Show the dialog
         dialog.exec_()
 
