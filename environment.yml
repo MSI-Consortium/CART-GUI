@@ -3,18 +3,12 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.8
+  - python=3.10
   - pandas
   - numpy
-  - matplotlib
   - scipy
+  - matplotlib
+  - scikit-learn
+  - pyqt=5
   - pingouin
-  - pyqt>=5.12
   - pip
-  - pip:
-    - PyQt5
-    - matplotlib
-    - pandas
-    - numpy
-    - scipy
-    - pingouin>=0.3.12
