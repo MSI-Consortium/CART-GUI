@@ -284,6 +284,9 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.plot_violations_button = QPushButton('Plot Violations', self)
         self.plot_violations_button.clicked.connect(self.plot_race_violations)
         self.use_percentiles_checkbox = QCheckBox('Use Percentiles', self)
+        self.per_participant_checkbox = QCheckBox('Calculate Per-Participant (Recommended)', self)
+        self.per_participant_checkbox.setChecked(True)  # Enable by default
+        race_model_layout.addWidget(self.per_participant_checkbox)
         race_model_layout.addWidget(self.plot_race_model_button)
         race_model_layout.addWidget(self.plot_violations_button)
         race_model_layout.addWidget(self.use_percentiles_checkbox)
@@ -2502,7 +2505,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                               self.percentile_range_slider.second_position)
             
             # Add this check to prevent the error
-            result = self.calculate_race_violation(data, percentile_range)
+            result = self.calculate_race_violation(data, percentile_range, 
+                                      self.per_participant_checkbox.isChecked())
             if result is None:
                 # Skip this dataset if we cannot compute race violation
                 ax.text(0.5, 0.5, f"Cannot calculate race model for\n{name}\n\nPossible issues:\n- Missing modality data\n- Insufficient trials\n- No variability in RTs",
@@ -2590,7 +2594,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             name = item.text()
             data = self.get_filtered_data(name)
             if data is not None:
-                result = self.calculate_race_violation(data, percentile_range)
+                result = self.calculate_race_violation(data, percentile_range,
+                                      self.per_participant_checkbox.isChecked())
                 if result is not None:
                     violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
                     figure_data['datasets'][name] = {
@@ -2670,7 +2675,8 @@ class ReactionTimeAnalysisGUI(QMainWindow):
 
             color = self.datasets[name]["color"]
 
-            result = self.calculate_race_violation(data, percentile_range)
+            result = self.calculate_race_violation(data, percentile_range,
+                                      self.per_participant_checkbox.isChecked())
             # Check if result is None
             if result is None:
                 # Skip this dataset if we cannot compute race violation
@@ -2837,7 +2843,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 
         return stats_text
 
-    def calculate_race_violation(self, participant_data, percentile_range):
+    def calculate_race_violation(self, participant_data, percentile_range, per_participant=True):
         """
         Calculate race model violations based on the selected model type.
         
@@ -2850,40 +2856,126 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             Data containing reaction times for each modality
         percentile_range : tuple
             Range of percentiles to consider (lower, upper)
-            
+        per_participant : bool
+            If True, calculate separately for each participant and average results
+            If False, calculate using pooled data across all participants
+                
         Returns:
         --------
         tuple
             (mean_violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model)
         """
-        rt_a = participant_data[participant_data['modality'] == 1]['reaction_time']
-        rt_v = participant_data[participant_data['modality'] == 2]['reaction_time']
-        rt_av = participant_data[participant_data['modality'] == 3]['reaction_time']
+        if per_participant:
+            # Calculate per participant and average
+            participants = participant_data['participant_number'].unique()
+            
+            # Define common RT grid for all participants
+            all_rt = participant_data['reaction_time']
+            if all_rt.empty:
+                return None
+            global_min = all_rt.min()
+            global_max = all_rt.max()
+            common_rts = np.linspace(global_min, global_max, 500)
+            
+            # Storage for individual and average results
+            all_ecdf_a = []
+            all_ecdf_v = []
+            all_ecdf_av = []
+            all_race_model = []
+            all_violations = []
+            valid_participant_count = 0
+            
+            for participant in participants:
+                # Get data for this participant
+                p_data = participant_data[participant_data['participant_number'] == participant]
+                
+                # Check if this participant has all modalities
+                rt_a = p_data[p_data['modality'] == 1]['reaction_time']
+                rt_v = p_data[p_data['modality'] == 2]['reaction_time']
+                rt_av = p_data[p_data['modality'] == 3]['reaction_time']
+                
+                # Skip participants with missing modalities or insufficient data
+                if rt_a.empty or rt_v.empty or rt_av.empty or len(rt_a) < 2 or len(rt_v) < 2 or len(rt_av) < 2:
+                    continue
+                    
+                # Calculate individual ECDFs
+                ecdf_a = np.interp(common_rts, np.sort(rt_a), np.arange(1, len(rt_a) + 1) / len(rt_a))
+                ecdf_v = np.interp(common_rts, np.sort(rt_v), np.arange(1, len(rt_v) + 1) / len(rt_v))
+                ecdf_av = np.interp(common_rts, np.sort(rt_av), np.arange(1, len(rt_av) + 1) / len(rt_av))
+                
+                # Calculate race model based on selected model type
+                race_model = self._calculate_race_model(ecdf_a, ecdf_v, common_rts)
+                
+                if race_model is not None:
+                    valid_participant_count += 1
+                    all_ecdf_a.append(ecdf_a)
+                    all_ecdf_v.append(ecdf_v)
+                    all_ecdf_av.append(ecdf_av)
+                    all_race_model.append(race_model)
+                    all_violations.append(np.maximum(ecdf_av - race_model, 0))
+            
+            # If no valid participants, return None
+            if valid_participant_count == 0:
+                return None
+            
+            # Average across participants
+            ecdf_a = np.mean(all_ecdf_a, axis=0)
+            ecdf_v = np.mean(all_ecdf_v, axis=0)
+            ecdf_av = np.mean(all_ecdf_av, axis=0)
+            race_model = np.mean(all_race_model, axis=0)
+            violations = np.mean(all_violations, axis=0)
+            
+        else:
+            # Original pooled calculation method
+            rt_a = participant_data[participant_data['modality'] == 1]['reaction_time']
+            rt_v = participant_data[participant_data['modality'] == 2]['reaction_time']
+            rt_av = participant_data[participant_data['modality'] == 3]['reaction_time']
+    
+            # Check if any modality is empty
+            if rt_a.empty or rt_v.empty or rt_av.empty:
+                return None  # Cannot calculate without all three modalities
+    
+            # Check for NaNs or identical min/max
+            if pd.isna(rt_a.min()) or pd.isna(rt_v.min()) or pd.isna(rt_av.min()):
+                return None
+            min_val = min(rt_a.min(), rt_v.min(), rt_av.min())
+            max_val = max(rt_a.max(), rt_v.max(), rt_av.max())
+            if min_val == max_val:
+                return None  # no variability
+    
+            # Create common reaction time points for interpolation
+            common_rts = np.linspace(min_val, max_val, 500)
+    
+            # Double-check lengths before interpolation
+            if len(rt_a) == 0 or len(rt_v) == 0 or len(rt_av) == 0:
+                return None
+    
+            # Calculate empirical cumulative distribution functions (ECDFs)
+            ecdf_a = np.interp(common_rts, np.sort(rt_a), np.arange(1, len(rt_a) + 1) / len(rt_a))
+            ecdf_v = np.interp(common_rts, np.sort(rt_v), np.arange(1, len(rt_v) + 1) / len(rt_v))
+            ecdf_av = np.interp(common_rts, np.sort(rt_av), np.arange(1, len(rt_av) + 1) / len(rt_av))
+            
+            # Calculate race model
+            race_model = self._calculate_race_model(ecdf_a, ecdf_v, common_rts)
+            if race_model is None:
+                return None
+                
+            # Calculate violations
+            violations = np.maximum(ecdf_av - race_model, 0)
+    
+        # Apply percentile range filter (for both methods)
+        lower_percentile, upper_percentile = percentile_range
+        lower_idx = int(len(violations) * lower_percentile / 100)
+        upper_idx = int(len(violations) * upper_percentile / 100)
+    
+        # Return mean violation within the specified range, along with all distributions
+        return np.mean(violations[lower_idx:upper_idx]), common_rts, ecdf_a, ecdf_v, ecdf_av, race_model
 
-        # Check if any modality is empty
-        if rt_a.empty or rt_v.empty or rt_av.empty:
-            return None  # Cannot calculate without all three modalities
-
-        # Check for NaNs or identical min/max
-        if pd.isna(rt_a.min()) or pd.isna(rt_v.min()) or pd.isna(rt_av.min()):
-            return None
-        min_val = min(rt_a.min(), rt_v.min(), rt_av.min())
-        max_val = max(rt_a.max(), rt_v.max(), rt_av.max())
-        if min_val == max_val:
-            return None  # no variability
-
-        # Create common reaction time points for interpolation
-        common_rts = np.linspace(min_val, max_val, 500)
-
-        # Double-check lengths before interpolation
-        if len(rt_a) == 0 or len(rt_v) == 0 or len(rt_av) == 0:
-            return None
-
-        # Calculate empirical cumulative distribution functions (ECDFs)
-        ecdf_a = np.interp(common_rts, np.sort(rt_a), np.arange(1, len(rt_a) + 1) / len(rt_a))
-        ecdf_v = np.interp(common_rts, np.sort(rt_v), np.arange(1, len(rt_v) + 1) / len(rt_v))
-        ecdf_av = np.interp(common_rts, np.sort(rt_av), np.arange(1, len(rt_av) + 1) / len(rt_av))
-
+    def _calculate_race_model(self, ecdf_a, ecdf_v, common_rts):
+        """
+        Helper method to calculate race model prediction based on the selected model type.
+        Extracted to avoid code duplication between per-participant and pooled methods.
+        """
         selected_model = self.model_selector.currentText()
         
         if selected_model == "Standard Race Model":
@@ -2892,31 +2984,23 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         elif selected_model == "Miller Standard Race Model":
             # Standard independent race model following Miller's inequality
-            # P(RT ≤ t)bimodal = min[P(RT ≤ t)modality1 + P(RT ≤ t)modality2, 1]
             race_model = np.minimum(ecdf_a + ecdf_v, 1.0)
             
         elif selected_model == "Coactivation Model":
             # Coactivation model with Gaussian CDF
-            # Parameters represent the mean and standard deviation of the combined activation
             mean_c = self.coactivation_mean_slider.value()
             std_c = self.coactivation_std_slider.value()
             race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
             
         elif selected_model == "Parallel Interactive Race Model":
             # Enhanced model with cross-modal interaction term
-            # P(RT ≤ t)bimodal = [1 - (1 - P(RT ≤ t)mod1)(1 - P(RT ≤ t)mod2)] + γ·P(RT ≤ t)interaction
-            # Here we model the interaction term as γ·min(P(RT ≤ t)mod1, P(RT ≤ t)mod2)
             gamma = self.pir_interaction_slider.value() / 100
-            # Base race model (probability of either modality finishing first)
             base_race = 1 - (1 - ecdf_a) * (1 - ecdf_v)
-            # Interaction term that facilitates responses
             interaction_term = gamma * np.minimum(ecdf_a, ecdf_v)
-            # Combined model with gamma-weighted interaction
             race_model = base_race + interaction_term
             
         elif selected_model == "Multisensory Response Enhancement Model":
             # Model with weighted contributions from each modality plus interaction
-            # P(RT ≤ t)bimodal = α·P(RT ≤ t)mod1 + β·P(RT ≤ t)mod2 + λ·[P(RT ≤ t)mod1 · P(RT ≤ t)mod2]
             alpha = self.mre_alpha_slider.value() / 100
             beta = self.mre_beta_slider.value() / 100
             lambda_param = self.mre_lambda_slider.value() / 100
@@ -2924,130 +3008,9 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             
         else:
             return None  # Unknown model
-
+    
         # Ensure race model is valid (probability between 0 and 1)
-        race_model = np.clip(race_model, 0, 1)
-        
-        # Run permutation test if enabled (now works with any model)
-        if hasattr(self, 'use_permutation_test_checkbox') and self.use_permutation_test_checkbox.isChecked():
-            # Calculate the observed test statistic (mean violation)
-            observed_violations = np.mean(np.maximum(ecdf_av - race_model, 0))
-            
-            # Get parameters for permutation test
-            try:
-                num_permutations = int(self.num_permutations_input2.text())
-                alpha_threshold = float(self.alpha_threshold_input2.text())
-            except (ValueError, AttributeError):
-                QMessageBox.warning(self, "Invalid Parameters", 
-                                  "Please enter valid numbers for permutation count and alpha threshold.")
-                num_permutations = 1000
-                alpha_threshold = 0.05
-            
-            # Permutation test
-            perm_violations = []
-            rt_combined = np.concatenate([rt_a, rt_v, rt_av])
-            n_a = len(rt_a)
-            n_v = len(rt_v)
-            n_av = len(rt_av)
-            
-            # Display a progress dialog for long-running permutation test
-            progress_dialog = QDialog(self)
-            progress_dialog.setWindowTitle("Running Permutation Test")
-            progress_layout = QVBoxLayout(progress_dialog)
-            
-            progress_label = QLabel("Calculating permutations...")
-            progress_bar = QSlider(Qt.Horizontal)  # Using QSlider as a progress bar
-            progress_bar.setRange(0, num_permutations)
-            progress_bar.setValue(0)
-            progress_bar.setEnabled(False)  # Make it read-only
-            
-            progress_layout.addWidget(progress_label)
-            progress_layout.addWidget(progress_bar)
-            
-            # Show dialog without blocking
-            progress_dialog.show()
-            QApplication.processEvents()  # Process UI events
-            
-            # Run permutation test
-            for i in range(num_permutations):
-                # Update progress bar periodically
-                if i % 10 == 0:
-                    progress_bar.setValue(i)
-                    QApplication.processEvents()  # Process UI events
-                    
-                # Shuffle the data to create permuted datasets
-                perm_combined = np.random.permutation(rt_combined)
-                perm_a = perm_combined[:n_a]
-                perm_v = perm_combined[n_a:n_a+n_v]
-                perm_av = perm_combined[n_a+n_v:n_a+n_v+n_av]
-                
-                # Calculate CDFs for permuted data
-                perm_ecdf_a = np.interp(common_rts, np.sort(perm_a), np.arange(1, len(perm_a) + 1) / len(perm_a))
-                perm_ecdf_v = np.interp(common_rts, np.sort(perm_v), np.arange(1, len(perm_v) + 1) / len(perm_v))
-                perm_ecdf_av = np.interp(common_rts, np.sort(perm_av), np.arange(1, len(perm_av) + 1) / len(perm_av))
-                
-                # Calculate race model for permuted data using the same model as selected
-                if selected_model == "Standard Race Model":
-                    # Apply the correct Standard Race Model formula (Raab's model)
-                    perm_race_model = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
-                elif selected_model == "Miller Standard Race Model":
-                    # Apply Miller's race model inequality
-                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)
-                elif selected_model == "Coactivation Model":
-                    mean_c = self.coactivation_mean_slider.value()
-                    std_c = self.coactivation_std_slider.value()
-                    perm_race_model = stats.norm.cdf(common_rts, loc=mean_c, scale=std_c)
-                elif selected_model == "Parallel Interactive Race Model":
-                    gamma = self.pir_interaction_slider.value() / 100
-                    base_race = 1 - (1 - perm_ecdf_a) * (1 - perm_ecdf_v)
-                    interaction_term = gamma * np.minimum(perm_ecdf_a, perm_ecdf_v)
-                    perm_race_model = base_race + interaction_term
-                elif selected_model == "Multisensory Response Enhancement Model":
-                    alpha = self.mre_alpha_slider.value() / 100
-                    beta = self.mre_beta_slider.value() / 100
-                    lambda_param = self.mre_lambda_slider.value() / 100
-                    perm_race_model = alpha * perm_ecdf_a + beta * perm_ecdf_v + lambda_param * (perm_ecdf_a * perm_ecdf_v)
-                else:
-                    # Default to Miller's inequality as a reasonable fallback
-                    perm_race_model = np.minimum(perm_ecdf_a + perm_ecdf_v, 1.0)
-                
-                perm_race_model = np.clip(perm_race_model, 0, 1)
-                
-                # Calculate and store violation for this permutation
-                perm_violation = np.mean(np.maximum(perm_ecdf_av - perm_race_model, 0))
-                perm_violations.append(perm_violation)
-            
-            # Close progress dialog
-            progress_dialog.close()
-            
-            # Calculate p-value as the proportion of permuted violations >= observed violation
-            p_value = np.mean(np.array(perm_violations) >= observed_violations)
-            
-            # Store permutation test results
-            self.race_model_p_value = p_value
-            self.race_model_significant = p_value < alpha_threshold
-            
-            # Add indicator to race model if significant violation was found
-            if self.race_model_significant:
-                race_model = race_model * 0.98  # Slightly lower the race model to indicate significance
-            
-            # Show results in status bar
-            significance_str = "significant" if self.race_model_significant else "not significant"
-            self.statusBar().showMessage(
-                f"Permutation test ({selected_model}): p-value = {p_value:.4f} "
-                f"(violations are {significance_str} at α = {alpha_threshold})", 8000)
-        
-        # Calculate violations as the positive difference between observed and predicted CDFs
-        violations = np.maximum(ecdf_av - race_model, 0)
-
-        # Apply percentile range filter
-        lower_percentile, upper_percentile = percentile_range
-        lower_idx = int(len(violations) * lower_percentile / 100)
-        upper_idx = int(len(violations) * upper_percentile / 100)
-
-        # Return mean violation within the specified range, along with all distributions
-        return np.mean(violations[lower_idx:upper_idx]), common_rts, ecdf_a, ecdf_v, ecdf_av, race_model
-
+        return np.clip(race_model, 0, 1)
     def update_scatter_feature_selectors(self):
         available = self.get_available_features()
         for selector in [self.factor1_selector, self.factor2_selector]:
