@@ -59,7 +59,7 @@ A comprehensive GUI tool for analyzing Simple Reaction Time (SRT) data with supp
 
 ## Installation
 ### App Installation
-A self-contained Mac and Windows Application of the GUI can be found here: https://drive.google.com/drive/u/0/folders/1-9Q1lAr3J_TuC20k3hZWmOzC08LtW_hj. The instructions in the sections below are for users who'd like to edit the source code. We also include a a program build_app.py for those who want to convert their modifications into apps.
+A self-contained Mac and Windows Application of the GUI can be found here: https://drive.google.com/drive/u/0/folders/1-9Q1lAr3J_TuC20k3hZWmOzC08LtW_hj. Note that you will need to allow the program to run through the control panel (windows) or settings (mac). The instructions in the sections below are for users who'd like to edit the source code. We also include a a program build_app_mac.py for those who want to convert their modifications into apps.
 
 ### Using Conda (Recommended)
 1. Clone the repository
