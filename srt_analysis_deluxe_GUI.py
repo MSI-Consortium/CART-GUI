@@ -3051,7 +3051,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.figure.clear()
         self.anova_table.setVisible(False)
         self.current_figure_type = 'scatter'
-    
+
         n_datasets = len(selected_items)
         n_cols = int(np.ceil(np.sqrt(n_datasets)))
         n_rows = int(np.ceil(n_datasets / n_cols))
@@ -3079,7 +3079,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             wspace=0.4,
             hspace=0.6
         )
-    
+
         axs = self.figure.subplots(nrows=n_rows, ncols=n_cols)
         axs = np.atleast_1d(axs).flatten()
         
@@ -3088,7 +3088,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Track global min/max for axis syncing
         global_xlim = [float('inf'), float('-inf')]
         global_ylim = [float('inf'), float('-inf')]
-    
+
         for idx, item in enumerate(selected_items):
             dataset_name = item.text()
             if dataset_name not in self.datasets:
@@ -3100,41 +3100,50 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             # Adjust label padding
             ax.tick_params(axis='both', which='major', pad=8)
             
-            # Rest of the plotting code...
             factor1 = self.factor1_selector.currentText()
             factor2 = self.factor2_selector.currentText()
             percentile_range = (self.percentile_range_slider.first_position, 
                                 self.percentile_range_slider.second_position)
-    
+
             participants = self.datasets[dataset_name]["data"]['participant_number'].unique()
             excluded_participants = self.excluded_participants.get(dataset_name, [])
-    
+            
+            # Track participants with incomplete data
+            incomplete_participants = []
+
             x_values = []
             y_values = []
             colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
             color_map = {participant: colors[i] for i, participant in enumerate(participants)}
-    
+
             for participant in participants:
                 if participant in excluded_participants:
                     continue
-                participant_data = self.datasets[dataset_name]["data"][self.datasets[dataset_name]["data"]['participant_number'] == participant]
-    
+                participant_data = self.datasets[dataset_name]["data"][
+                    self.datasets[dataset_name]["data"]['participant_number'] == participant
+                ]
+
                 x_value = self.get_factor_value(participant_data, factor1, percentile_range)
                 y_value = self.get_factor_value(participant_data, factor2, percentile_range)
-    
-                if x_value is not None and y_value is not None:
+
+                # Check that neither value is None or nan
+                if (x_value is not None and y_value is not None and
+                    not (isinstance(x_value, float) and np.isnan(x_value)) and
+                    not (isinstance(y_value, float) and np.isnan(y_value))):
                     x_values.append(x_value)
                     y_values.append(y_value)
                     ax.scatter(x_value, y_value, color=color_map[participant], 
-                               label=f'P{participant}', s=25)
+                            label=f'P{participant}', s=25)
+                else:
+                    incomplete_participants.append(participant)
             
             if x_values and y_values:
                 # Update global limits
                 global_xlim[0] = min(global_xlim[0], min(x_values))
-                global_xlim[1] = max(global_xlim[0], max(x_values))
+                global_xlim[1] = max(global_xlim[1], max(x_values))
                 global_ylim[0] = min(global_ylim[0], min(y_values))
-                global_ylim[1] = max(global_ylim[0], max(y_values))
-    
+                global_ylim[1] = max(global_ylim[1], max(y_values))
+
             # Add line of best fit if enough points
             if len(x_values) > 1 and len(y_values) > 1:
                 x = np.array(x_values)
@@ -3152,8 +3161,11 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 stats_text += f"r = {r_value:.2f}, p = {p_value:.2f}\n"
                 if p_value < 0.05:
                     stats_text += "Significant correlation at p < 0.05\n"
+                
+                if incomplete_participants:
+                    stats_text += f"Excluded participants with incomplete data: {', '.join(map(str, incomplete_participants))}\n"
                 stats_text += "\n"
-    
+
             ax.set_title(f'{dataset_name}')
             ax.set_xlabel(factor1)
             ax.set_ylabel(factor2)
@@ -3165,42 +3177,41 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 ax.legend(loc='best', fontsize=6)
 
         # Apply synced axes if checkbox is checked
-            if self.sync_axes_checkbox.isChecked():
-                # Calculate 5% buffer
-                x_range = global_xlim[1] - global_xlim[0]
-                y_range = global_ylim[1] - global_ylim[0]
-                x_buffer = x_range * 0.05
-                y_buffer = y_range * 0.05
-                
-                # Apply buffered limits to all subplots
-                for ax in axs[:len(selected_items)]:
-                    ax.set_xlim(global_xlim[0] - x_buffer, global_xlim[1] + x_buffer)
-                    ax.set_ylim(global_ylim[0] - y_buffer, global_ylim[1] + y_buffer)
+        if self.sync_axes_checkbox.isChecked() and not (global_xlim[0] == float('inf') or global_ylim[0] == float('inf')):
+            x_range = global_xlim[1] - global_xlim[0]
+            y_range = global_ylim[1] - global_ylim[0]
+            x_buffer = x_range * 0.05
+            y_buffer = y_range * 0.05
+            
+            for ax in axs[:len(selected_items)]:
+                ax.set_xlim(global_xlim[0] - x_buffer, global_xlim[1] + x_buffer)
+                ax.set_ylim(global_ylim[0] - y_buffer, global_ylim[1] + y_buffer)
         
-        # Hide unused subplots
+        # Hide any unused subplots
         for idx in range(len(selected_items), len(axs)):
             axs[idx].set_visible(False)
 
-            figure_data = {
-                'datasets': {}
-            }
-            for idx, item in enumerate(selected_items):
-                dataset_name = item.text()
-                data = self.get_filtered_data(dataset_name)
-                if data is not None:
-                    figure_data['datasets'][dataset_name] = {
-                        'x_values': x_values,
-                        'y_values': y_values,
-                        'factor1': factor1,
-                        'factor2': factor2,
-                        'correlation': {
-                            'r_value': r_value,
-                            'p_value': p_value,
-                            'slope': slope,
-                            'intercept': intercept
-                        }
+        figure_data = {
+            'datasets': {}
+        }
+        for idx, item in enumerate(selected_items):
+            dataset_name = item.text()
+            data = self.get_filtered_data(dataset_name)
+            if data is not None:
+                figure_data['datasets'][dataset_name] = {
+                    'x_values': x_values,
+                    'y_values': y_values,
+                    'factor1': factor1,
+                    'factor2': factor2,
+                }
+                if 'r_value' in locals() and 'p_value' in locals():
+                    figure_data['datasets'][dataset_name]['correlation'] = {
+                        'r_value': r_value,
+                        'p_value': p_value,
+                        'slope': slope,
+                        'intercept': intercept
                     }
-            self.store_figure_data('scatter', figure_data)   
+        self.store_figure_data('scatter', figure_data)   
 
         self.figure.tight_layout()
         self.canvas.draw()
@@ -3387,32 +3398,34 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     target_csv = base + "_target_rdm.csv"
                     labels_csv = base + "_target_labels.csv"
     
-                    # Expect data with keys: "participant_ids", "feature_rdm", "age_rdm", "age_values", "selected_metric"
+                    # Use "target_rdm" and "color_values" if available, else fall back to "age_rdm" and "age_values"
+                    target_key = "target_rdm" if "target_rdm" in data else "age_rdm"
+                    label_key = "color_values" if "color_values" in data else "age_values"
+    
                     df_feature = pd.DataFrame(data["feature_rdm"],
                                               index=data["participant_ids"],
                                               columns=data["participant_ids"])
                     df_feature.to_csv(feature_csv, index=True)
     
-                    df_target = pd.DataFrame(data["age_rdm"],
+                    df_target = pd.DataFrame(data[target_key],
                                              index=data["participant_ids"],
                                              columns=data["participant_ids"])
                     df_target.to_csv(target_csv, index=True)
     
                     df_labels = pd.DataFrame({
                         "participant_id": data["participant_ids"],
-                        "target_label": data["age_values"]
+                        "target_label": data[label_key]
                     })
                     df_labels.to_csv(labels_csv, index=False)
     
                     self.statusBar().showMessage(
                         f'RDM data saved to:\nFeature RDM: {feature_csv}\nTarget RDM: {target_csv}\nLabels: {labels_csv}', 5000)
             else:
-                # Default behavior: save as JSON if not a nested "datasets" structure
+                # Default saving behavior
                 if (not isinstance(data, dict)) or ('datasets' not in data) or file_path.lower().endswith('.json'):
                     with open(file_path, 'w') as f:
                         json.dump(data, f, indent=4)
                 else:
-                    # Convert nested dict into a CSV-friendly format
                     rows = []
                     for dataset, values in data['datasets'].items():
                         for key, value in values.items():
@@ -3683,12 +3696,56 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Tab 2: Demographic Criteria
         demo_tab = QWidget()
         demo_layout = QVBoxLayout(demo_tab)
-        demo_form = QFormLayout()
         
+        # Add prominent age range section at the top
+        age_group = QGroupBox("Age Range Filter")
+        age_layout = QHBoxLayout(age_group)
+        
+        # Create min/max age input fields
+        min_age_input = QLineEdit()
+        min_age_input.setPlaceholderText("Minimum Age")
+        max_age_input = QLineEdit()
+        max_age_input.setPlaceholderText("Maximum Age")
+        
+        # Make these text boxes more prominent
+        font = QFont()
+        font.setBold(True)
+        min_age_input.setFont(font)
+        max_age_input.setFont(font)
+        
+        # Add labels and inputs to layout
+        age_layout.addWidget(QLabel("Min Age:"))
+        age_layout.addWidget(min_age_input)
+        age_layout.addWidget(QLabel("Max Age:"))
+        age_layout.addWidget(max_age_input)
+        
+        # Add helper text to explain what happens
+        age_help_label = QLabel("Participants outside this age range will be excluded.")
+        age_help_label.setWordWrap(True)
+        age_layout.addWidget(age_help_label)
+        
+        # Add age group to the main demographic layout
+        demo_layout.addWidget(age_group)
+        
+        # Add a separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        demo_layout.addWidget(separator)
+        
+        # Continue with other demographic filters
+        demo_form = QFormLayout()
         demographic_filters = {}
         
+        # Store the age inputs in the demographic filters dictionary
+        # Find the appropriate column name for age
+        age_col = next((col for col in demo_cols if col.lower() in ['age', 'subjectage']), None)
+        if age_col and age_col in data.columns:
+            demographic_filters[age_col] = {"type": "numeric", "widgets": (min_age_input, max_age_input)}
+        
+        # Add other demographic filters
         for col in demo_cols:
-            if col in data.columns:
+            if col in data.columns and col.lower() not in ['age', 'subjectage']:  # Skip age as we've already handled it
                 if pd.api.types.is_numeric_dtype(data[col]):
                     # Numeric filter
                     filter_layout = QHBoxLayout()
@@ -3739,24 +3796,45 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             manual_excluded = [p for p, cb in participant_checkboxes.items() if cb.isChecked()]
             excluded.update(manual_excluded)
             
-            # Demographic exclusions
+            # Dedicated age range filter
+            if age_col and age_col in data.columns:
+                try:
+                    min_val = float(min_age_input.text()) if min_age_input.text() else None
+                    max_val = float(max_age_input.text()) if max_age_input.text() else None
+                    
+                    # Convert age column to numeric, forcing non-numeric values to NaN
+                    numeric_age = pd.to_numeric(data[age_col], errors='coerce')
+                    
+                    if min_val is not None:
+                        excluded.update(str(p) for p in data[numeric_age < min_val]['participant_number'].unique())
+                    if max_val is not None:
+                        excluded.update(str(p) for p in data[numeric_age > max_val]['participant_number'].unique())
+                except (ValueError, TypeError):
+                    # Handle any conversion errors
+                    pass
+            
+            # Other demographic exclusions
             for col, filter_info in demographic_filters.items():
-                if filter_info["type"] == "numeric":
-                    min_widget, max_widget = filter_info["widgets"]
-                    try:
-                        min_val = float(min_widget.text()) if min_widget.text() else None
-                        max_val = float(max_widget.text()) if max_widget.text() else None
-                        
-                        if min_val is not None:
-                            excluded.update(str(p) for p in data[data[col] < min_val]['participant_number'])
-                        if max_val is not None:
-                            excluded.update(str(p) for p in data[data[col] > max_val]['participant_number'])
-                    except ValueError:
-                        pass
-                else:  # categorical
-                    selected_values = [cb.text() for cb in filter_info["widgets"] if cb.isChecked()]
-                    if selected_values:
-                        excluded.update(str(p) for p in data[~data[col].isin(selected_values)]['participant_number'])
+                if col != age_col:  # Skip age as we already handled it separately
+                    if filter_info["type"] == "numeric":
+                        min_widget, max_widget = filter_info["widgets"]
+                        try:
+                            min_val = float(min_widget.text()) if min_widget.text() else None
+                            max_val = float(max_widget.text()) if max_widget.text() else None
+                            
+                            # Convert column to numeric for comparison
+                            numeric_col = pd.to_numeric(data[col], errors='coerce')
+                            
+                            if min_val is not None:
+                                excluded.update(str(p) for p in data[numeric_col < min_val]['participant_number'].unique())
+                            if max_val is not None:
+                                excluded.update(str(p) for p in data[numeric_col > max_val]['participant_number'].unique())
+                        except (ValueError, TypeError):
+                            pass
+                    else:  # categorical
+                        selected_values = [cb.text() for cb in filter_info["widgets"] if cb.isChecked()]
+                        if selected_values:
+                            excluded.update(str(p) for p in data[~data[col].isin(selected_values)]['participant_number'].unique())
             
             # Update preview text
             preview = "Exclusion Summary:\n"
@@ -3782,6 +3860,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         preview_button.clicked.connect(update_preview)
         
+        # Rest of the dialog code remains unchanged...
         # Add save options
         save_options = QGroupBox("Save Options")
         save_layout = QHBoxLayout(save_options)
