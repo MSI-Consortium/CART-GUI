@@ -27,12 +27,15 @@ from sklearn.preprocessing import MinMaxScaler
 
 sys.setrecursionlimit(5000)
 class RangeSlider(QWidget):
-    valueChanged = pyqtSignal(int, int)
+    valueChanged = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.first_position = 0
-        self.second_position = 100
+        self.first_position = 0.0
+        self.second_position = 100.0
+        self.min_value = 0.0
+        self.max_value = 100.0
+        self.precision = 3  # Decimal places for display
 
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -41,7 +44,7 @@ class RangeSlider(QWidget):
         self.first_slider = QSlider(Qt.Horizontal)
         self.first_slider.setRange(0, 100)
         self.first_slider.setValue(0)
-        self.first_label = QLabel(str(self.first_slider.value()))
+        self.first_label = QLabel(str(self.min_value))
         self.first_label.setAlignment(Qt.AlignCenter)
         vbox_first = QVBoxLayout()
         vbox_first.addWidget(self.first_label)
@@ -51,7 +54,7 @@ class RangeSlider(QWidget):
         self.second_slider = QSlider(Qt.Horizontal)
         self.second_slider.setRange(0, 100)
         self.second_slider.setValue(100)
-        self.second_label = QLabel(str(self.second_slider.value()))
+        self.second_label = QLabel(str(self.max_value))
         self.second_label.setAlignment(Qt.AlignCenter)
         vbox_second = QVBoxLayout()
         vbox_second.addWidget(self.second_label)
@@ -67,29 +70,54 @@ class RangeSlider(QWidget):
         if value > self.second_slider.value():
             self.first_slider.setValue(self.second_slider.value())
             return
-        self.first_position = value
+        self.first_position = self._scaled_value(value)
         # Update label for first slider
-        self.first_label.setText(str(value))
+        self.first_label.setText(f"{self.first_position:.{self.precision}f}")
         self.valueChanged.emit(self.first_position, self.second_position)
 
     def on_second_slider_value_changed(self, value):
         if value < self.first_slider.value():
             self.second_slider.setValue(self.first_slider.value())
             return
-        self.second_position = value
+        self.second_position = self._scaled_value(value)
         # Update label for second slider
-        self.second_label.setText(str(value))
+        self.second_label.setText(f"{self.second_position:.{self.precision}f}")
         self.valueChanged.emit(self.first_position, self.second_position)
 
+    def _scaled_value(self, slider_value):
+        """Convert slider int value (0-100) to actual float in min_value to max_value range"""
+        range_size = self.max_value - self.min_value
+        return self.min_value + (slider_value / 100.0) * range_size
+
+    def _slider_value(self, actual_value):
+        """Convert actual value to slider int value (0-100)"""
+        range_size = self.max_value - self.min_value
+        normalized = (actual_value - self.min_value) / range_size
+        return int(normalized * 100)
+
     def setRange(self, start, end):
-        self.first_slider.setRange(start, end)
-        self.second_slider.setRange(start, end)
+        """Set the min/max values for the slider range"""
+        if start >= end:
+            return  # Invalid range
+        self.min_value = float(start)
+        self.max_value = float(end)
+        # Update labels
+        self.first_label.setText(f"{self.first_position:.{self.precision}f}")
+        self.second_label.setText(f"{self.second_position:.{self.precision}f}")
 
     def setStart(self, value):
-        self.first_slider.setValue(value)
+        """Set the start value (converts to appropriate slider position)"""
+        value = max(self.min_value, min(value, self.max_value))
+        self.first_position = value
+        self.first_slider.setValue(self._slider_value(value))
+        self.first_label.setText(f"{value:.{self.precision}f}")
 
     def setEnd(self, value):
-        self.second_slider.setValue(value)
+        """Set the end value (converts to appropriate slider position)"""
+        value = max(self.min_value, min(value, self.max_value))
+        self.second_position = value
+        self.second_slider.setValue(self._slider_value(value))
+        self.second_label.setText(f"{value:.{self.precision}f}")
 
 
 class ReactionTimeAnalysisGUI(QMainWindow):
@@ -123,7 +151,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
     
         # Create a QTabWidget on the left for controls
         self.controls_tabs = QTabWidget()
-        self.controls_tabs.setMinimumWidth(450)
+        self.controls_tabs.setMinimumWidth(750)
         self.controls_tabs.setTabPosition(QTabWidget.West)
     
         # -----------------------------
@@ -277,20 +305,37 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         self.more_info_button.clicked.connect(self.show_more_info)
         analysis_layout.addWidget(self.more_info_button)
     
-        # Race Model Plot buttons
-        race_model_layout = QHBoxLayout()
+         # Race Model Plot controls: top row
+        race_model_top = QHBoxLayout()
+        self.exclude_nonviolators_checkbox = QCheckBox('Excl Non‑Violators', self)
+        self.per_participant_checkbox = QCheckBox('Calc Per-Person', self)
+        self.per_participant_checkbox.setChecked(True)
         self.plot_race_model_button = QPushButton('Plot Race Model', self)
         self.plot_race_model_button.clicked.connect(self.plot_race_model)
         self.plot_violations_button = QPushButton('Plot Violations', self)
         self.plot_violations_button.clicked.connect(self.plot_race_violations)
         self.use_percentiles_checkbox = QCheckBox('Use Percentiles', self)
-        self.per_participant_checkbox = QCheckBox('Calculate Per-Participant (Recommended)', self)
-        self.per_participant_checkbox.setChecked(True)  # Enable by default
-        race_model_layout.addWidget(self.per_participant_checkbox)
-        race_model_layout.addWidget(self.plot_race_model_button)
-        race_model_layout.addWidget(self.plot_violations_button)
-        race_model_layout.addWidget(self.use_percentiles_checkbox)
-        analysis_layout.addLayout(race_model_layout)
+        for w in (self.exclude_nonviolators_checkbox,
+                   self.per_participant_checkbox,
+                   self.plot_race_model_button,
+                   self.plot_violations_button,
+                   self.use_percentiles_checkbox):
+             race_model_top.addWidget(w)
+        analysis_layout.addLayout(race_model_top)
+ 
+         # Race Model Plot controls: bottom row (slider + label)
+        race_model_bottom = QHBoxLayout()
+        self.violation_filter_label = QLabel('Violation Value Range: –', self)
+        self.violation_filter_label.setWordWrap(True)
+        self.violation_range_slider = RangeSlider(self)
+        self.violation_range_slider.setRange(0, 100)
+        self.violation_range_slider.setStart(0)
+        self.violation_range_slider.setEnd(100)
+        self.violation_range_slider.valueChanged.connect(self.update_violation_filter_label)
+        race_model_bottom.addWidget(self.violation_filter_label)
+        race_model_bottom.addWidget(self.violation_range_slider)
+        analysis_layout.addLayout(race_model_bottom)
+
     
         # Scatter Plot Controls & percentile slider
         scatter_layout = QHBoxLayout()
@@ -411,6 +456,39 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         main_layout.addWidget(right_widget, 1)
         self.show()
 
+    def update_violation_filter_label(self, lo, hi):
+        """
+        Update the label under the violation‐range slider to show the
+        raw violation‐value range and the actual min/max violation across
+        participants in the first selected dataset.
+        """
+        # Base text: the raw‐value slider bounds
+        text = f'Violation Value Range: {lo:.3f} – {hi:.3f}'
+        
+        # Compute actual min/max violation across participants in the first selected dataset
+        items = self.dataset_list.selectedItems()
+        if items:
+            ds = items[0].text()
+            df = self.datasets.get(ds, {}).get("data", None)
+            if df is not None:
+                violations = []
+                # Use current percentile‐slider range for CDF window
+                pct_lo = self.percentile_range_slider.first_position
+                pct_hi = self.percentile_range_slider.second_position
+                for p in df['participant_number'].unique():
+                    sub = df[df['participant_number'] == p]
+                    res = self.calculate_race_violation(sub,
+                                                        (pct_lo, pct_hi),
+                                                        self.per_participant_checkbox.isChecked())
+                    if res:
+                        violations.append(res[0])
+                if violations:
+                    mn, mx = min(violations), max(violations)
+                    text += f'\nMinimum violation: {mn:.3f}   Maximum violation: {mx:.3f}'
+                    text += f'\nExcluding {len(df["participant_number"].unique()) - len(violations)} participants with invalid data'
+        
+        self.violation_filter_label.setText(text)
+        
     def create_model_parameter_widgets(self):
         # Coactivation Model parameters
         self.coactivation_widget = QWidget(self)
@@ -999,9 +1077,91 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         # Update participant selector
         self.update_participant_selector()
         
+        # Update violation slider range based on selected datasets
+        if has_selection:
+            self.update_violation_slider_range()
+        
         # Update any current plots if they exist
         if hasattr(self, 'current_figure_type') and self.current_figure_type:
             self.update_plots()
+            
+    def get_participant_violation_value(self, participant_data, percentile_range):
+        """
+        Calculate race model violation value for a participant consistently across the application.
+        
+        Parameters:
+        -----------
+        participant_data : pandas.DataFrame
+            Data for a single participant
+        percentile_range : tuple
+            Range of percentiles to consider (lower, upper)
+            
+        Returns:
+        --------
+        float or None
+            The race model violation value (cumulative sum of positive violations)
+        """
+        # Ensure all modalities exist
+        for mod in [1, 2, 3]:
+            if not (participant_data['modality'] == mod).any():
+                return None
+                
+        result = self.calculate_race_violation(participant_data, percentile_range, 
+                                              self.per_participant_checkbox.isChecked())
+        if result is None:
+            return None
+            
+        # Calculate cumulative violation using the same method as in get_factor_value
+        _, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
+        lower_idx = int(len(common_rts) * percentile_range[0] / 100)
+        upper_idx = int(len(common_rts) * percentile_range[1] / 100)
+        
+        # Sum positive violations within the specified range
+        cumulative_violation = np.sum(np.maximum(ecdf_av[lower_idx:upper_idx] - race_model[lower_idx:upper_idx], 0))
+        return cumulative_violation
+    def update_violation_slider_range(self):
+        """
+        Calculate min and max violation values across participants in selected datasets
+        and update the violation range slider accordingly.
+        """
+        selected_items = self.dataset_list.selectedItems()
+        if not selected_items:
+            return
+        
+        min_violation = float('inf')
+        max_violation = float('-inf')
+        
+        # Get current percentile range for CDF window
+        percentile_range = (self.percentile_range_slider.first_position, 
+                           self.percentile_range_slider.second_position)
+        
+        for item in selected_items:
+            dataset_name = item.text()
+            data = self.get_filtered_data(dataset_name)
+            if data is None:
+                continue
+            
+            for participant in data['participant_number'].unique():
+                participant_data = data[data['participant_number'] == participant]
+                viol_val = self.get_participant_violation_value(participant_data, percentile_range)
+                if viol_val is not None:
+                    min_violation = min(min_violation, viol_val)
+                    max_violation = max(max_violation, viol_val)
+        
+        # Only update slider if we found valid values
+        if min_violation != float('inf') and max_violation != float('-inf'):
+            # Add small padding to ensure values at min/max are included
+            padding = (max_violation - min_violation) * 0.05
+            min_violation = max(min_violation - padding, 0)  # Ensure non-negative
+            max_violation = max_violation + padding
+            
+            # Update slider range
+            self.violation_range_slider.setRange(min_violation, max_violation)
+            self.violation_range_slider.setStart(min_violation)
+            self.violation_range_slider.setEnd(max_violation)
+            
+            # Force update of the label
+            self.update_violation_filter_label(min_violation, max_violation)
 
     def update_participant_selector(self):
         """Update participant selector based on selected datasets"""
@@ -2448,168 +2608,127 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         return np.any(z_scores > 2)
 
     def plot_race_model(self):
+        """
+        Plot CDFs and race‐model for each selected dataset, filtering out
+        participants whose mean violation (res[0]) falls outside the
+        raw‐value slider bounds.
+        """
         if not self.datasets:
             return
-            
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
             return
-        
+
+        # Prepare figure & layout
         self.figure.clear()
-        self.figure.set_size_inches(8, 5)  # Base canvas size
         self.current_figure_type = 'race_model'
-        
-        # Calculate grid dimensions
-        n_datasets = len(selected_items)
-        n_cols = int(np.ceil(np.sqrt(n_datasets)))
-        n_rows = int(np.ceil(n_datasets / n_cols))
-        
-        # Base figure size with max dimensions
-        max_width = 12
-        max_height = 8
-        
-        # Calculate size per subplot
-        width_per_plot = 4
-        height_per_plot = 3
-        
-        # Calculate total size needed
-        total_width = min(max_width, n_cols * width_per_plot)
-        total_height = min(max_height, n_rows * height_per_plot)
-        
-        self.figure.set_size_inches(total_width, total_height)
-        
-        # Adjust subplot spacing based on number of plots
-        self.figure.subplots_adjust(
-            left=0.1,
-            right=0.95,
-            bottom=0.1,
-            top=0.9,
-            wspace=0.4,
-            hspace=0.6  # Increased vertical space between plots
-        )
-        
-        # Create subplots with optimized spacing
-        axs = self.figure.subplots(nrows=n_rows, ncols=n_cols)
-        axs = np.atleast_1d(axs).flatten()
-        
+        n = len(selected_items)
+        n_cols = int(np.ceil(np.sqrt(n)))
+        n_rows = int(np.ceil(n / n_cols))
+        max_w, max_h = 12, 8
+        w_per, h_per = 4, 3
+        total_w = min(max_w, n_cols * w_per)
+        total_h = min(max_h, n_rows * h_per)
+        self.figure.set_size_inches(total_w, total_h)
+        self.figure.subplots_adjust(left=0.1, right=0.95, bottom=0.1,
+                                    top=0.9, wspace=0.4, hspace=0.6)
+        axs = np.atleast_1d(self.figure.subplots(n_rows, n_cols)).flatten()
         all_stats = []
-        
+
+        # Raw‐value slider bounds for violation filtering
+        lo_val = self.violation_range_slider.first_position
+        hi_val = self.violation_range_slider.second_position
+        # Percentile CDF window remains on the other slider
+        pct_lo = self.percentile_range_slider.first_position
+        pct_hi = self.percentile_range_slider.second_position
+        percentile_range = (pct_lo, pct_hi)
+
         for idx, item in enumerate(selected_items):
             name = item.text()
             ax = axs[idx]
-            
             data = self.datasets[name]["data"]
             color = self.datasets[name]["color"]
-            
-            percentile_range = (self.percentile_range_slider.first_position,
-                              self.percentile_range_slider.second_position)
-            
-            # Add this check to prevent the error
-            result = self.calculate_race_violation(data, percentile_range, 
-                                      self.per_participant_checkbox.isChecked())
-            if result is None:
-                # Skip this dataset if we cannot compute race violation
-                ax.text(0.5, 0.5, f"Cannot calculate race model for\n{name}\n\nPossible issues:\n- Missing modality data\n- Insufficient trials\n- No variability in RTs",
-                       ha='center', va='center', fontsize=9)
+
+            # Filter participants by raw violation value
+            valid, excluded = [], []
+            for p in data['participant_number'].unique():
+                sub = data[data['participant_number'] == p]
+                viol_val = self.get_participant_violation_value(sub, percentile_range)
+                if viol_val is not None:
+                    if lo_val <= viol_val <= hi_val:
+                        valid.append(p)
+                    else:
+                        excluded.append(p)
+            # Track and apply exclusions
+            self.excluded_participants[name] = excluded
+            data = data[data['participant_number'].isin(valid)]
+
+            # Now compute the race‐model on the filtered data
+            result = self.calculate_race_violation(data,
+                                                   percentile_range,
+                                                   self.per_participant_checkbox.isChecked())
+            if not result:
+                ax.text(0.5, 0.5,
+                        f"Cannot calculate race model for\n{name}\n\nPossible issues:\n"
+                        "- Missing modality data\n- Insufficient trials\n- No variability in RTs",
+                        ha='center', va='center', fontsize=9)
                 continue
-                
+
             violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
-        
-            # Plot CDFs
-            ax.plot(common_rts, ecdf_a, label='Audio', color='red', linewidth=1.5)
-            ax.plot(common_rts, ecdf_v, label='Visual', color='blue', linewidth=1.5)
-            ax.plot(common_rts, ecdf_av, label='AV', color='purple', linewidth=1.5)  # Shortened label
-            ax.plot(common_rts, race_model, label='Race', color='black', 
-                    linestyle='--', linewidth=1)  # Shortened label
-        
-            # Shade violations
-            violations = ecdf_av > race_model
-            lower_idx = np.searchsorted(ecdf_av, percentile_range[0] / 100)
-            upper_idx = np.searchsorted(ecdf_av, percentile_range[1] / 100)
-            ax.fill_between(common_rts[lower_idx:upper_idx],
-                           race_model[lower_idx:upper_idx],
-                           ecdf_av[lower_idx:upper_idx],
-                           where=violations[lower_idx:upper_idx],
-                           color='red', alpha=0.2)  # Reduced alpha
-        
-            # Smaller title with single line
-            ax.set_title(name, pad=5, fontsize=9)
-            
-            if idx >= (n_rows-1) * n_cols:  # Bottom row
-                ax.set_xlabel('RT (ms)', fontsize=8)
-            if idx % n_cols == 0:  # Leftmost column
-                ax.set_ylabel('Probability', fontsize=8)
-            
-            # Optimize legend
-            ax.legend(fontsize=7, loc='lower right', 
-                     bbox_to_anchor=(0.98, 0.02),
-                     borderaxespad=0,
-                     frameon=False,
-                     ncol=2)  # Two columns for legend
-            
-            # Remove unnecessary spines and ticks
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.tick_params(axis='both', which='major', labelsize=8)
-            
-            # Calculate statistics
-            violation_area = np.sum(np.maximum(ecdf_av - race_model, 0))
-            violation_max = np.max(ecdf_av - race_model)
-            violation_percent = (np.sum(violations) / len(violations)) * 100
-            
-            all_stats.append({
-                'name': name,
-                'area': violation_area,
-                'max': violation_max,
-                'percent': violation_percent
-            })
-        
-        # Hide unused subplots
-        for idx in range(len(selected_items), len(axs)):
-            axs[idx].set_visible(False)
-        
-        # Format statistics text
+
+            # Plot CDFs & shading
+            ax.plot(common_rts, ecdf_a, color='blue', linestyle='--', label='Audio CDF')
+            ax.plot(common_rts, ecdf_v, color='red', linestyle='--', label='Visual CDF')
+            ax.plot(common_rts, ecdf_av, color=color, label='AV CDF')
+            ax.plot(common_rts, race_model, color='black', linestyle='-', label='Race Model')
+
+            # Shade violation area
+            ax.fill_between(common_rts, ecdf_av, race_model,
+                            where=(ecdf_av > race_model), color=color, alpha=0.3)
+
+            ax.set_title(f'Race Model - {name}')
+            ax.set_xlabel('Reaction Time (ms)')
+            ax.set_ylabel('CDF')
+            if self.show_legend_checkbox.isChecked():
+                ax.legend(loc='best', fontsize=6)
+
+            # Collect stats for summary
+            area = np.sum(np.maximum(ecdf_av - race_model, 0))
+            peak = np.max(ecdf_av - race_model)
+            pct_viol = np.mean(ecdf_av > race_model) * 100
+            all_stats.append({'name': name, 'area': area, 'max': peak, 'percent': pct_viol})
+
+        # Hide any unused subplots
+        for ax in axs[len(selected_items):]:
+            ax.set_visible(False)
+
+        # Build stats text and display
         stats_text = "Race Model Violation Statistics:\n\n"
-        column_format = "{:<12}| Area:{:.3f} | Max:{:.3f} | Viol:{:.1f}%"
-        chars_per_col = 40
-        canvas_width = 80
-        items_per_row = max(1, canvas_width // chars_per_col)
-        
-        for i in range(0, len(all_stats), items_per_row):
-            row_stats = all_stats[i:i + items_per_row]
-            row_text = []
-            for stat in row_stats:
-                row_text.append(column_format.format(
-                    stat['name'][:12],
-                    stat['area'],
-                    stat['max'],
-                    stat['percent']
-                ))
-            stats_text += "  ".join(row_text) + "\n"
-        
-        figure_data = {
-            'datasets': {}
-        }
-        for item in selected_items:
-            name = item.text()
-            data = self.get_filtered_data(name)
-            if data is not None:
-                result = self.calculate_race_violation(data, percentile_range,
-                                      self.per_participant_checkbox.isChecked())
-                if result is not None:
-                    violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
-                    figure_data['datasets'][name] = {
-                        'common_rts': common_rts.tolist(),
-                        'ecdf_audio': ecdf_a.tolist(),
-                        'ecdf_visual': ecdf_v.tolist(),
-                        'ecdf_av': ecdf_av.tolist(),
-                        'race_model': race_model.tolist()
-                    }
-        self.store_figure_data('race_model', figure_data)
+        fmt = "{:<12}| Area:{:.3f} | Max:{:.3f} | Viol:{:.1f}%"
+        for s in all_stats:
+            stats_text += fmt.format(s['name'][:12], s['area'],
+                                     s['max'], s['percent']) + "\n"
+
         self.explanation_label.setText(stats_text)
+
+        # Append list of excluded participants
+        combined_excluded = []
+        for name in self.excluded_participants:
+            if self.excluded_participants[name]:
+                combined_excluded += [
+                    f"{name}: " +
+                    ", ".join(map(str, sorted(self.excluded_participants[name])))
+                ]
+        if combined_excluded:
+            self.explanation_label.append(
+                "\nExcluded participants (violation‐value outside "
+                f"{lo_val:.3f}–{hi_val:.3f}):\n" +
+                "\n".join(combined_excluded)
+            )
+
         self.figure.tight_layout()
         self.canvas.draw()
-    
+
     def get_available_features(self):
         """
         Return a list of base features filtered by the union of columns
@@ -2655,54 +2774,124 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         selected_items = self.dataset_list.selectedItems()
         if not selected_items:
             return
-
+    
         self.figure.clear()
         self.figure.set_size_inches(8, 5)
         ax = self.figure.add_subplot(111)
         self.current_figure_type = 'race_violations'
-
-        percentile_range = (self.percentile_range_slider.first_position,
+    
+        # Get percentile range for CDF window
+        percentile_range = (self.percentile_range_slider.first_position, 
                         self.percentile_range_slider.second_position)
-
+                        
+        # Get violation filter range
+        lo_val = self.violation_range_slider.first_position
+        hi_val = self.violation_range_slider.second_position
+    
         violation_stats = {}
         figure_data = {'datasets': {}}
-
+        total_excluded = 0
+        excluded_participants = {}  # Track excluded participants by dataset
+        
+        xlabel = 'Reaction Time (ms)'  # Default label in case there are no valid datasets
+    
         for item in selected_items:
             name = item.text()
             data = self.get_filtered_data(name)
             if data is None:
                 continue
-
+                
+            # Filter participants by violation value
+            parts = data['participant_number'].unique()
+            valid = []
+            excluded_by_violation = []  # Track excluded participants for this dataset
+            
+            for p in parts:
+                sub = data[data['participant_number']==p]
+                viol_val = self.get_participant_violation_value(sub, percentile_range)
+                if viol_val is not None:
+                    if lo_val <= viol_val <= hi_val:
+                        valid.append(p)
+                    else:
+                        excluded_by_violation.append(p)  # Track which participants were excluded
+            
+            excluded = len(parts) - len(valid)
+            total_excluded += excluded
+            excluded_participants[name] = excluded_by_violation  # Store excluded participants for this dataset
+            
+            data = data[data['participant_number'].isin(valid)]
+                
+            # Handle non-violators filtering
+            nonviolator_excluded = []  # Track participants excluded for having no violations
+            if self.exclude_nonviolators_checkbox.isChecked():
+                parts = data['participant_number'].unique()
+                valid_nonzero = []
+                for p in parts:
+                    sub = data[data['participant_number']==p]
+                    res = self.calculate_race_violation(sub, percentile_range,
+                                                        self.per_participant_checkbox.isChecked())
+                    if res and res[0] > 0:
+                        valid_nonzero.append(p)
+                    else:
+                        nonviolator_excluded.append(p)
+                        
+                excluded += len(parts) - len(valid_nonzero)
+                data = data[data['participant_number'].isin(valid_nonzero)]
+                
             color = self.datasets[name]["color"]
-
+    
             result = self.calculate_race_violation(data, percentile_range,
                                       self.per_participant_checkbox.isChecked())
-            # Check if result is None
+                                      
+            # Always display something, even if we can't compute violations
             if result is None:
-                # Skip this dataset if we cannot compute race violation
+                # Create default x-axis and zero violations
+                default_x = np.linspace(0, 1000, 100)  # Default RT range
+                default_violations = np.zeros_like(default_x)  # All zeros
+                
+                # Plot flat line at zero
+                ax.plot(default_x, default_violations, color=color, label=f"{name} (no valid data)", 
+                       linestyle='--', linewidth=1)
+                
+                # Store statistics
+                violation_stats[name] = {
+                    'max': 0,
+                    'mean': 0,
+                    'total': 0,
+                    'percent': 0,
+                    'valid': False
+                }
+                
+                figure_data['datasets'][name] = {
+                    'reaction_times': default_x.tolist(),
+                    'violations': default_x.tolist(),
+                    'statistics': {
+                        'max': 0.0,
+                        'mean': 0.0,
+                        'total': 0.0,
+                        'percent': 0.0
+                    }
+                }
+                
                 continue
-
+                
             violation, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
-
             violations = ecdf_av - race_model
-
-            if self.use_percentiles_checkbox.isChecked():
-                # If using percentiles, ensure we have valid data. If not, skip.
-                if len(common_rts) == 0:
-                    continue
-
+    
             if self.use_percentiles_checkbox.isChecked():
                 av_data = data[data['modality'] == 3]['reaction_time'].values
-                x_axis = np.array([scipy.stats.percentileofscore(av_data, rt) for rt in common_rts])
-                xlabel = 'Percentile'
+                if len(av_data) > 0:
+                    x_axis = np.array([scipy.stats.percentileofscore(av_data, rt) for rt in common_rts])
+                    xlabel = 'Percentile'
+                else:
+                    x_axis = common_rts
             else:
                 x_axis = common_rts
-                xlabel = 'Reaction Time (ms)'
-
+    
             ax.plot(x_axis, violations, color=color, label=name, linewidth=2)
             ax.fill_between(x_axis, violations, 0, where=(violations > 0),
                         color=color, alpha=0.3)
-
+    
             violation_stats[name] = {
                 'max': np.max(violations),
                 'mean': np.mean(violations),
@@ -2711,7 +2900,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 'reaction_times': x_axis,
                 'violations': violations
             }
-
+    
             figure_data['datasets'][name] = {
                 'reaction_times': x_axis.tolist(),
                 'violations': violations.tolist(),
@@ -2722,15 +2911,15 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                     'percent': float((np.sum(violations > 0) / len(violations)) * 100)
                 }
             }
-
+    
         ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
         ax.set_xlabel(xlabel)
         ax.set_ylabel('Violation Magnitude')
         ax.set_title('Race Model Violations by Dataset')
-
+    
         if self.show_legend_checkbox.isChecked():
             ax.legend(loc='best', frameon=False)
-
+        
         stats_text = "Race Model Violation Statistics:\n\n"
         column_format = "{:<15} | Maximum: {:.3f} | Mean: {:.3f} | Total: {:.3f} | Violations: {:.1f}%"
         chars_per_col = 80
@@ -2739,7 +2928,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
         
         dataset_names = list(violation_stats.keys())
         n_rows = int(np.ceil(len(dataset_names) / items_per_row))
-
+    
         for row in range(n_rows):
             row_text = []
             for col in range(items_per_row):
@@ -2747,21 +2936,31 @@ class ReactionTimeAnalysisGUI(QMainWindow):
                 if idx < len(dataset_names):
                     name = dataset_names[idx]
                     stats = violation_stats[name]
-                    row_text.append(column_format.format(
-                        name[:15],
-                        stats['max'],
-                        stats['mean'],
-                        stats['total'],
-                        stats['percent']
-                    ))
+                    if stats.get('valid', True):
+                        row_text.append(column_format.format(
+                            name[:15],
+                            stats['max'],
+                            stats['mean'],
+                            stats['total'],
+                            stats['percent']
+                        ))
+                    else:
+                        row_text.append(f"{name[:15]} | No valid violation data")
             stats_text += "\n".join(row_text) + "\n"
-
+    
+        # Add excluded participant information to stats text
+        if total_excluded > 0:
+            stats_text += "\nExcluded Participants by Dataset:\n"
+            for dataset, excluded_parts in excluded_participants.items():
+                if excluded_parts:
+                    excluded_parts_str = ", ".join(map(str, sorted(excluded_parts)))
+                    stats_text += f"{dataset}: {len(excluded_parts)} participants ({excluded_parts_str})\n"
+    
         self.store_figure_data('race_violations', figure_data)
         self.explanation_label.setText(stats_text)
         self._customize_axes(ax)
         self.figure.tight_layout()
         self.canvas.draw()
-
 
 
     def plot_single_dataset_violations(self, dataset_name, ax):
@@ -3271,19 +3470,7 @@ class ReactionTimeAnalysisGUI(QMainWindow):
             return self.calculate_interquartile_range(participant_data, modality=3)
         elif factor == 'Race Violations':
             # Ensure all modalities exist; if not, show warning and return None.
-            for mod in [1, 2, 3]:
-                if not (participant_data['modality'] == mod).any():
-                    self.statusBar().showMessage(f"Participant {participant_data['participant_number'].iloc[0]} is missing modality {mod} data – skipping.", 5000)
-                    return None
-            result = self.calculate_race_violation(participant_data, percentile_range)
-            if result is None:
-                return None
-            # Compute cumulative violation using indices based on percentiles.
-            _, common_rts, ecdf_a, ecdf_v, ecdf_av, race_model = result
-            lower_idx = np.searchsorted(ecdf_av, percentile_range[0] / 100)
-            upper_idx = np.searchsorted(ecdf_av, percentile_range[1] / 100)
-            cumulative_violation = np.sum(np.maximum(ecdf_av[lower_idx:upper_idx] - race_model[lower_idx:upper_idx], 0))
-            return cumulative_violation
+            return self.get_participant_violation_value(participant_data, percentile_range)
         elif factor == 'Total Trials':
             return len(participant_data)
         elif factor == 'Mean RT (Audio)':
